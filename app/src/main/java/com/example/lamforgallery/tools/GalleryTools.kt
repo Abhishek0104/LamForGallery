@@ -1,7 +1,13 @@
 package com.example.lamforgallery.tools
 
+import android.content.ContentUris
 import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Conceptual class. This is where you write the *actual* Android logic
@@ -15,14 +21,73 @@ import android.util.Log
 class GalleryTools(private val context: Context) {
 
     private val TAG = "GalleryTools"
+    private val resolver = context.contentResolver
 
+    /**
+     * This is no longer a stub!
+     * This method now queries the MediaStore for photos where
+     * the display name (filename) matches the query.
+     */
     suspend fun searchPhotos(query: String): List<String> {
-        Log.d(TAG, "AGENT REQUESTED SEARCH for: $query")
-        // Return a fake list of Uris for testing
-        return listOf(
-            "content://media/external/images/media/101",
-            "content://media/external/images/media/102"
-        )
+        // We are doing I/O (Input/Output) by querying the
+        // ContentResolver, so we switch to the IO dispatcher.
+        return withContext(Dispatchers.IO) {
+            val photoUris = mutableListOf<String>()
+
+            // 1. Define what columns we want to get back
+            val projection = arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DISPLAY_NAME
+            )
+
+            // 2. Define the "WHERE" clause of our query
+            // We search for any filename that CONTAINS the query string
+            val selection = "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?"
+
+            // 3. Define the value for the "?" in our "WHERE" clause
+            val selectionArgs = arrayOf("%$query%")
+
+            // 4. Define how to sort the results
+            val sortOrder = "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+
+            // 5. Run the query!
+            Log.d(TAG, "Querying MediaStore with: $query")
+            try {
+                resolver.query(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    sortOrder
+                )?.use { cursor ->
+                    // Get the column indices
+                    val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+
+                    // 6. Loop through all the results (rows)
+                    while (cursor.moveToNext()) {
+                        // Get the ID of the photo
+                        val id = cursor.getLong(idColumn)
+
+                        // 7. Build the full "content URI" for this photo
+                        val contentUri: Uri = ContentUris.withAppendedId(
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                            id
+                        )
+
+                        // Add the URI (as a string) to our list
+                        photoUris.add(contentUri.toString())
+                    }
+                    Log.d(TAG, "Found ${photoUris.size} photos matching query.")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error querying MediaStore", e)
+                // Return an empty list if something goes wrong
+                return@withContext emptyList<String>()
+            }
+
+            // 8. Return the list of real URIs
+            photoUris
+        }
     }
 
     suspend fun deletePhotos(photoUris: List<String>): Boolean {
