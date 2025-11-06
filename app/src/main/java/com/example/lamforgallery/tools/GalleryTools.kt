@@ -2,6 +2,7 @@ package com.example.lamforgallery.tools
 
 import android.content.ContentUris
 import android.content.Context
+import android.content.IntentSender
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -90,10 +91,29 @@ class GalleryTools(private val context: Context) {
         }
     }
 
-    suspend fun deletePhotos(photoUris: List<String>): Boolean {
+    suspend fun createDeleteRequest(photoUris: List<String>): IntentSender? {
         Log.d(TAG, "AGENT REQUESTED DELETE for: $photoUris")
-        // In Step 4, this would launch an Intent for user permission.
-        return true // Assume success
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            // On older Android (API < 30), we'd need a different, more complex
+            // permission model (WRITE_EXTERNAL_STORAGE).
+            // For this app, we'll only support the modern API 30+ way.
+            Log.w(TAG, "Delete is only supported on Android 11+ for this app.")
+            return null
+        }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                // Convert string URIs back to Uri objects
+                val urisToDelete = photoUris.map { Uri.parse(it) }
+
+                // This is the modern, safe way to request deletion
+                MediaStore.createDeleteRequest(resolver, urisToDelete).intentSender
+            } catch (e: Exception) {
+                Log.e(TAG, "Error creating delete request", e)
+                null
+            }
+        }
     }
 
     suspend fun createCollage(photoUris: List<String>, title: String): String {
