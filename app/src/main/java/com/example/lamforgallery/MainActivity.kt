@@ -28,12 +28,11 @@ class MainActivity : ComponentActivity() {
 
     private val TAG = "MainActivity"
 
-    // Get the ViewModel using our custom factory
     private val viewModel: AgentViewModel by viewModels {
         AgentViewModelFactory(application)
     }
 
-    // --- PERMISSION HANDLING (READ) ---
+    // --- READ PERMISSION ---
     private val permissionToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_IMAGES
     } else {
@@ -44,34 +43,34 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { isGranted: Boolean ->
-            if (isGranted) {
-                Log.d(TAG, "READ permission granted!")
-                isPermissionGranted = true
-            } else {
-                Log.d(TAG, "READ permission denied.")
-                isPermissionGranted = false
-            }
+            isPermissionGranted = isGranted
         }
     // --- END READ PERMISSION ---
 
 
-    // --- PERMISSION HANDLING (DELETE) ---
-    // This is the new launcher for the delete confirmation dialog
-    private val deleteRequestLauncher =
+    // --- MODIFY PERMISSIONS (GENERALIZED) ---
+    // We need to keep track of what *type* of permission we just asked for
+    private var currentPermissionType: PermissionType? = null
+
+    // We only need ONE launcher for all IntentSender requests
+    private val permissionRequestLauncher =
         registerForActivityResult(
             ActivityResultContracts.StartIntentSenderForResult()
         ) { activityResult ->
-            if (activityResult.resultCode == RESULT_OK) {
-                // User approved the deletion
-                Log.d(TAG, "Delete permission GRANTED by user.")
-                viewModel.onDeletePermissionResult(wasSuccessful = true)
-            } else {
-                // User denied or cancelled the deletion
-                Log.d(TAG, "Delete permission DENIED by user.")
-                viewModel.onDeletePermissionResult(wasSuccessful = false)
+            val type = currentPermissionType
+            if (type == null) {
+                Log.e(TAG, "permissionRequestLauncher result but currentPermissionType is null!")
+                return@registerForActivityResult
             }
+
+            val wasSuccessful = activityResult.resultCode == RESULT_OK
+            Log.d(TAG, "Permission result for $type: ${if (wasSuccessful) "GRANTED" else "DENIED"}")
+            viewModel.onPermissionResult(wasSuccessful, type)
+
+            // Clear the type after use
+            currentPermissionType = null
         }
-    // --- END DELETE PERMISSION ---
+    // --- END MODIFY PERMISSIONS ---
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -86,13 +85,14 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     if (isPermissionGranted) {
-                        // We now pass the delete launcher function
-                        // to the AgentScreen
                         AgentScreen(
                             viewModel = viewModel,
-                            onLaunchDeleteRequest = { intentSender ->
-                                Log.d(TAG, "Launching deleteRequestLauncher...")
-                                deleteRequestLauncher.launch(
+                            onLaunchPermissionRequest = { intentSender, type ->
+                                Log.d(TAG, "Launching permissionRequestLauncher for $type...")
+                                // Save the type so our launcher's callback knows
+                                // what it was for.
+                                currentPermissionType = type
+                                permissionRequestLauncher.launch(
                                     IntentSenderRequest.Builder(intentSender).build()
                                 )
                             }
@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkAndRequestPermission() {
+        // ... (existing code, no changes) ...
         when {
             ContextCompat.checkSelfPermission(
                 this,
@@ -129,10 +130,9 @@ class MainActivity : ComponentActivity() {
 // ... PermissionDeniedScreen composable remains unchanged ...
 @Composable
 fun PermissionDeniedScreen(onRequestPermission: () -> Unit) {
+    // ... (existing code, no changes) ...
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
+        modifier = Modifier.fillMaxSize().padding(32.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -159,26 +159,21 @@ fun PermissionDeniedScreen(onRequestPermission: () -> Unit) {
 @Composable
 fun AgentScreen(
     viewModel: AgentViewModel,
-    onLaunchDeleteRequest: (IntentSender) -> Unit // New parameter
+    // Generalized callback
+    onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit
 ) {
-    // Collect the UI state from the ViewModel
     val uiState by viewModel.uiState.collectAsState()
 
-    // --- NEW: Handle the delete permission request ---
-    // We use a LaunchedEffect to handle the "one-shot" event of
-    // needing to show a permission dialog. This effect will re-run
-    // whenever the uiState changes.
     LaunchedEffect(uiState) {
         val state = uiState
         if (state is AgentUiState.RequiresPermission) {
-            // The ViewModel is telling us to launch the delete request.
-            Log.d("AgentScreen", "Detected RequiresPermission state, launching dialog...")
-            onLaunchDeleteRequest(state.intentSender)
+            // The ViewModel is telling us to launch a permission request.
+            // We pass *both* the intent and the type.
+            Log.d("AgentScreen", "Detected RequiresPermission state: ${state.type}")
+            onLaunchPermissionRequest(state.intentSender, state.type)
         }
     }
-    // --- END NEW ---
 
-    // State for the text input field
     var inputText by remember { mutableStateOf("") }
 
     Column(
@@ -188,7 +183,6 @@ fun AgentScreen(
         verticalArrangement = Arrangement.Bottom
     ) {
 
-        // Display area for agent messages
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -223,13 +217,13 @@ fun AgentScreen(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.error)
                 }
-                // --- NEW: Show a loading message while dialog is active ---
                 is AgentUiState.RequiresPermission -> {
+                    // This UI now uses the dynamic message from the state
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            "Waiting for user permission to delete...",
+                            state.message,
                             textAlign = TextAlign.Center,
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -241,7 +235,6 @@ fun AgentScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Input row
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -260,11 +253,10 @@ fun AgentScreen(
             Button(
                 onClick = {
                     viewModel.sendUserInput(inputText)
-                    inputText = "" // Clear input after sending
+                    inputText = ""
                 },
-                // --- NEW: Disable button while loading OR waiting for permission ---
                 enabled = uiState !is AgentUiState.Loading && uiState !is AgentUiState.RequiresPermission,
-                modifier = Modifier.height(56.dp) // Match text field height
+                modifier = Modifier.height(56.dp)
             ) {
                 Text("Send")
             }

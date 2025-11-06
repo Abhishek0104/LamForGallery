@@ -2,6 +2,7 @@ package com.example.lamforgallery
 
 import android.app.Application
 import android.content.IntentSender
+import android.os.Build
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -19,7 +20,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-// Define the states our UI can be in
+// Define a type for our pending permissions
+enum class PermissionType { DELETE, WRITE }
+
 sealed class AgentUiState {
     object Idle : AgentUiState()
     data class Loading(val message: String) : AgentUiState()
@@ -27,11 +30,14 @@ sealed class AgentUiState {
     data class Error(val error: String) : AgentUiState()
 
     /**
-     * A new state to tell the Activity to launch a permission request.
-     * This state is "sticky" and will not be cleared by the ViewModel
-     * until the Activity calls `onDeletePermissionResult`.
+     * Refactored state: Now holds the IntentSender AND the type of
+     * permission we are requesting.
      */
-    data class RequiresPermission(val intentSender: IntentSender) : AgentUiState()
+    data class RequiresPermission(
+        val intentSender: IntentSender,
+        val type: PermissionType,
+        val message: String
+    ) : AgentUiState()
 }
 
 class AgentViewModel(
@@ -43,20 +49,13 @@ class AgentViewModel(
     private val TAG = "AgentViewModel"
     private var currentSessionId: String? = null
 
-    /**
-     * We need to store the ID of the tool call that is
-     * waiting for permission.
-     */
+    // Store the full context of a pending tool call
     private var pendingToolCallId: String? = null
+    private var pendingToolArgs: Map<String, Any>? = null
 
-    // Backing property for the UI state
     private val _uiState = MutableStateFlow<AgentUiState>(AgentUiState.Idle)
-    // Public, read-only state flow for the UI to observe
     val uiState: StateFlow<AgentUiState> = _uiState.asStateFlow()
 
-    /**
-     * Public entry point for the user to make a request.
-     */
     fun sendUserInput(input: String) {
         if (input.isBlank() || _uiState.value is AgentUiState.Loading) return
 
@@ -73,34 +72,65 @@ class AgentViewModel(
     }
 
     /**
-     * NEW: Public entry point for the Activity to report
-     * the result of the delete permission dialog.
+     * Renamed and generalized permission result handler.
+     * This is the callback from the Activity.
      */
-    fun onDeletePermissionResult(wasSuccessful: Boolean) {
+    fun onPermissionResult(wasSuccessful: Boolean, type: PermissionType) {
         val toolCallId = pendingToolCallId
         if (toolCallId == null) {
-            Log.e(TAG, "onDeletePermissionResult called but no pendingToolCallId")
+            Log.e(TAG, "onPermissionResult called but no pendingToolCallId")
             return
         }
 
-        // Clear the pending call ID
+        // Clear the pending call *after* use
+        val args = pendingToolArgs
+
         pendingToolCallId = null
+        pendingToolArgs = null
 
-        // Convert the boolean result to a JSON string
-        val resultJsonString = gson.toJson(wasSuccessful)
+        viewModelScope.launch {
+            if (!wasSuccessful) {
+                Log.w(TAG, "User denied permission for $type")
+                sendToolResult(gson.toJson(false), toolCallId)
+                return@launch
+            }
 
-        // Resume the agent loop
-        sendToolResult(resultJsonString, toolCallId)
+            // User granted permission. Now we do the *second step* if needed.
+            Log.d(TAG, "User granted permission for $type")
+            when (type) {
+                PermissionType.DELETE -> {
+                    // Delete was one-step. Just send the success.
+                    sendToolResult(gson.toJson(true), toolCallId)
+                }
+                PermissionType.WRITE -> {
+                    // Write is two-step. We must now perform the move.
+                    if (args == null) {
+                        Log.e(TAG, "Write permission granted but no pending args!")
+                        sendToolResult(gson.toJson(false), toolCallId)
+                        return@launch
+                    }
+
+                    _uiState.value = AgentUiState.Loading("Moving files...")
+
+                    // Extract the arguments we saved
+                    val uris = args["photo_uris"] as? List<String> ?: emptyList()
+                    val album = args["album_name"] as? String ?: "New Album"
+
+                    // Call the *second* GalleryTools function
+                    val moveResult = galleryTools.performMoveOperation(uris, album)
+
+                    // Send the *final* result of the move back to the agent
+                    sendToolResult(gson.toJson(moveResult), toolCallId)
+                }
+            }
+        }
     }
 
-    /**
-     * The main stateful loop that communicates with the agent.
-     */
     private suspend fun handleAgentRequest(request: AgentRequest) {
         try {
             val response = apiService.invokeAgent(request)
             Log.d(TAG, "Received response: $response")
-            currentSessionId = response.sessionId // Save session ID
+            currentSessionId = response.sessionId
 
             when (response.status) {
                 "complete" -> {
@@ -108,30 +138,21 @@ class AgentViewModel(
                     _uiState.value = AgentUiState.AgentMessage(message)
                 }
                 "requires_action" -> {
-                    val actions = response.nextActions ?: emptyList()
-                    if (actions.isEmpty()) {
+                    val action = response.nextActions?.firstOrNull()
+                    if (action == null) {
                         Log.e(TAG, "Agent required action but sent none.")
                         sendToolResult("ERROR: Agent asked for action but sent none.", "error-id")
                         return
                     }
 
-                    val action = actions.first()
                     _uiState.value = AgentUiState.Loading("Working on it: ${action.name}...")
-
-                    /**
-                     * CRITICAL CHANGE: executeLocalTool might now return null
-                     * if it needs to pause for user permission.
-                     */
                     val toolResultJson = executeLocalTool(action)
 
                     if (toolResultJson != null) {
                         // Tool executed synchronously (like search)
-                        // Send the result back to the agent to continue the loop
                         sendToolResult(toolResultJson, action.id)
                     } else {
-                        // Tool (delete) has paused for permission.
-                        // The UI state is now RequiresPermission.
-                        // We do *not* call sendToolResult. We wait.
+                        // Tool (delete/move) has paused for permission.
                         Log.d(TAG, "Loop paused, waiting for permission result.")
                     }
                 }
@@ -142,49 +163,60 @@ class AgentViewModel(
         }
     }
 
-    /**
-     * This function maps the agent's tool name to your *actual* Kotlin code.
-     * It now returns a String? (nullable).
-     * - A String means the tool finished and here is the result.
-     * - `null` means the tool has paused for user interaction.
-     */
     private suspend fun executeLocalTool(toolCall: ToolCall): String? {
         Log.d(TAG, "Executing local tool: ${toolCall.name} with args: ${toolCall.args}")
+
+        // This is for API 30 (Android 11) and above.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            Log.w(TAG, "Modify operations only supported on Android 11+")
+            return gson.toJson(mapOf("error" to "Modify/Delete operations require Android 11+"))
+        }
+
         val result: Any? = try {
             when (toolCall.name) {
                 "search_photos" -> {
                     val query = toolCall.args["query"] as? String ?: ""
-                    galleryTools.searchPhotos(query) // Returns List<String>
+                    galleryTools.searchPhotos(query)
                 }
                 "delete_photos" -> {
                     val uris = toolCall.args["photo_uris"] as? List<String> ?: emptyList()
-
-                    // Ask GalleryTools to create the request
-                    val intentSender = galleryTools.createDeleteRequest(uris)
+                    val intentSender = galleryTools.createDeleteIntentSender(uris)
 
                     if (intentSender != null) {
-                        // SUCCESS: We have a request.
-                        // 1. Save the tool ID so we can resume later
                         pendingToolCallId = toolCall.id
-                        // 2. Tell the UI to launch the dialog
-                        _uiState.value = AgentUiState.RequiresPermission(intentSender)
-                        // 3. Return null to pause the loop
-                        null
+                        pendingToolArgs = null // Delete has no second step
+                        _uiState.value = AgentUiState.RequiresPermission(
+                            intentSender,
+                            PermissionType.DELETE,
+                            "Waiting for user permission to delete..."
+                        )
+                        null // Pause the loop
                     } else {
-                        // FAILURE: Couldn't create request (e.g., old Android)
-                        // Return an error result immediately.
-                        mapOf("error" to "Could not create delete request. (Maybe unsupported Android version?)")
+                        mapOf("error" to "Could not create delete request.")
                     }
-                }
-                "create_collage" -> {
-                    val uris = toolCall.args["photo_uris"] as? List<String> ?: emptyList()
-                    val title = toolCall.args["title"] as? String ?: "My Collage"
-                    galleryTools.createCollage(uris, title) // Returns new collage URI (String)
                 }
                 "move_photos_to_album" -> {
                     val uris = toolCall.args["photo_uris"] as? List<String> ?: emptyList()
-                    val album = toolCall.args["album_name"] as? String ?: "New Album"
-                    galleryTools.movePhotosToAlbum(uris, album) // Returns Boolean
+                    val intentSender = galleryTools.createWriteIntentSender(uris)
+
+                    if (intentSender != null) {
+                        pendingToolCallId = toolCall.id
+                        pendingToolArgs = toolCall.args // SAVE arguments for step 2
+                        _uiState.value = AgentUiState.RequiresPermission(
+                            intentSender,
+                            PermissionType.WRITE,
+                            "Waiting for user permission to move files..."
+                        )
+                        null // Pause the loop
+                    } else {
+                        mapOf("error" to "Could not create write/move request.")
+                    }
+                }
+                "create_collage" -> {
+                    // ... (stub remains) ...
+                    val uris = toolCall.args["photo_uris"] as? List<String> ?: emptyList()
+                    val title = toolCall.args["title"] as? String ?: "My Collage"
+                    galleryTools.createCollage(uris, title)
                 }
                 else -> {
                     mapOf("error" to "Tool '${toolCall.name}' is not implemented on this client.")
@@ -195,8 +227,6 @@ class AgentViewModel(
             mapOf("error" to "Failed to execute ${toolCall.name}: ${e.message}")
         }
 
-        // If result is null, it means we're waiting for permission.
-        // Otherwise, convert the result to JSON and return it.
         return result?.let {
             val jsonResult = gson.toJson(it)
             Log.d(TAG, "Tool ${toolCall.name} result (JSON): $jsonResult")
@@ -204,13 +234,8 @@ class AgentViewModel(
         }
     }
 
-    /**
-     * Helper function to send the result of a tool back to the agent.
-     * This is now also called by `onDeletePermissionResult`.
-     */
     private fun sendToolResult(resultJsonString: String, toolCallId: String) {
         viewModelScope.launch {
-            // Set state back to loading
             _uiState.value = AgentUiState.Loading("Sending result to agent...")
 
             val toolResult = ToolResult(
@@ -223,21 +248,15 @@ class AgentViewModel(
                 toolResult = toolResult
             )
             Log.d(TAG, "Sending tool result for $toolCallId")
-            // Continue the loop
             handleAgentRequest(request)
         }
     }
 }
 
-
-/**
- * Simple ViewModel Factory to manually create the AgentViewModel
- * with its dependencies.
- */
+// Factory is unchanged
 class AgentViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(AgentViewModel::class.java)) {
-            // Manually provide the dependencies
             val apiService = NetworkModule.apiService
             val galleryTools = GalleryTools(application.applicationContext)
             val gson = NetworkModule.gson
