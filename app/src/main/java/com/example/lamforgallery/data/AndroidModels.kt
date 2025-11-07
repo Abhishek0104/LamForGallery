@@ -6,7 +6,9 @@ import com.google.gson.annotations.SerializedName
 data class AgentRequest(
     @SerializedName("sessionId") val sessionId: String?,
     @SerializedName("userInput") val userInput: String?,
-    @SerializedName("toolResult") val toolResult: ToolResult?
+    @SerializedName("toolResult") val toolResult: ToolResult? = null,
+    @SerializedName("selectedUris") val selectedUris: List<String>? = null
+
 )
 
 data class ToolResult(

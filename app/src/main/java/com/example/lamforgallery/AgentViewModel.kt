@@ -51,7 +51,8 @@ sealed class AgentStatus {
 
 data class AgentUiState(
     val messages: List<ChatMessage> = emptyList(),
-    val currentStatus: AgentStatus = AgentStatus.Idle
+    val currentStatus: AgentStatus = AgentStatus.Idle,
+    val selectedImageUris: Set<String> = emptySet()
 )
 
 enum class PermissionType { DELETE, WRITE }
@@ -77,6 +78,18 @@ class AgentViewModel(
     private val _uiState = MutableStateFlow(AgentUiState())
     val uiState: StateFlow<AgentUiState> = _uiState.asStateFlow()
 
+    fun toggleImageSelection(uri: String) {
+        _uiState.update { currentState ->
+            val newSelection = currentState.selectedImageUris.toMutableSet()
+            if (newSelection.contains(uri)) {
+                newSelection.remove(uri)
+            } else {
+                newSelection.add(uri)
+            }
+            currentState.copy(selectedImageUris = newSelection)
+        }
+        Log.d(TAG, "New selection: ${uiState.value.selectedImageUris}")
+    }
     fun sendUserInput(input: String) {
         if (_uiState.value.currentStatus !is AgentStatus.Idle) {
             Log.w(TAG, "Agent is busy, ignoring input.")
@@ -84,21 +97,32 @@ class AgentViewModel(
         }
 
         viewModelScope.launch {
+            // Get the current selection *before* clearing it
+            val selection = _uiState.value.selectedImageUris
+
             // 1. Add the user's message to the chat list
+            // We show the *original* text, not the augmented version
             addMessage(ChatMessage(text = input, sender = Sender.USER))
 
-            // 2. Set the status to Loading
+            // 2. Set the status to Loading & clear selection
             setStatus(AgentStatus.Loading("Thinking..."))
+            clearSelection()
 
-            // 3. Send to agent
+            // 3. Send to agent (with the selection)
             val request = AgentRequest(
                 sessionId = currentSessionId,
                 userInput = input,
-                toolResult = null // <-- THE FIX IS HERE
+                toolResult = null,
+                selectedUris = selection.toList() // <-- SEND SELECTION
             )
-            Log.d(TAG, "Sending user input: $input")
+
+            Log.d(TAG, "Sending user input: $input, with ${selection.size} selected URIs")
             handleAgentRequest(request)
         }
+    }
+
+    private fun clearSelection() {
+        _uiState.update { it.copy(selectedImageUris = emptySet()) }
     }
 
     fun onPermissionResult(wasSuccessful: Boolean, type: PermissionType) {
