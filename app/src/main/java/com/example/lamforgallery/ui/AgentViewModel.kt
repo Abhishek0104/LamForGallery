@@ -1,4 +1,4 @@
-package com.example.lamforgallery
+package com.example.lamforgallery.ui
 
 import android.app.Application
 import android.content.IntentSender
@@ -8,7 +8,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.lamforgallery.data.AgentRequest
-import com.example.lamforgallery.data.AgentResponse
 import com.example.lamforgallery.data.ToolCall
 import com.example.lamforgallery.data.ToolResult
 import com.example.lamforgallery.network.AgentApiService
@@ -396,30 +395,30 @@ class AgentViewModel(
  * ViewModel Factory
  * This is a simple factory to create the AgentViewModel with its dependencies.
  */
-class AgentViewModelFactory(
-    private val application: Application
-) : ViewModelProvider.Factory {
-
-    // Create a singleton instance of Gson
-    private val gson: Gson by lazy {
-        NetworkModule.gson // Use the Gson from NetworkModule
-    }
-
-    // Create a singleton instance of GalleryTools
-    private val galleryTools: GalleryTools by lazy {
-        GalleryTools(application.contentResolver) // Pass Application context
-    }
-
-    // Create a singleton instance of AgentApiService
-    private val agentApi: AgentApiService by lazy {
-        NetworkModule.apiService // Use the apiService from NetworkModule
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(AgentViewModel::class.java)) {
-            return AgentViewModel(application, agentApi, galleryTools, gson) as T
-        }
-        throw IllegalArgumentException("Unknown ViewModel class")
-    }
-}
+//class AgentViewModelFactory(
+//    private val application: Application
+//) : ViewModelProvider.Factory {
+//
+//    // Create a singleton instance of Gson
+//    private val gson: Gson by lazy {
+//        NetworkModule.gson // Use the Gson from NetworkModule
+//    }
+//
+//    // Create a singleton instance of GalleryTools
+//    private val galleryTools: GalleryTools by lazy {
+//        GalleryTools(application.contentResolver) // Pass Application context
+//    }
+//
+//    // Create a singleton instance of AgentApiService
+//    private val agentApi: AgentApiService by lazy {
+//        NetworkModule.apiService // Use the apiService from NetworkModule
+//    }
+//
+//    @Suppress("UNCHECKED_CAST")
+//    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+//        if (modelClass.isAssignableFrom(AgentViewModel::class.java)) {
+//            return AgentViewModel(application, agentApi, galleryTools, gson) as T
+//        }
+//        throw IllegalArgumentException("Unknown ViewModel class")
+//    }
+//}

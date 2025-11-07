@@ -20,7 +20,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.LamForGallery">
         <activity
-            android:name=".MainActivity"
+            android:name=".ui.MainActivity"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.LamForGallery">

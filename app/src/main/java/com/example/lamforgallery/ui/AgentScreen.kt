@@ -1,17 +1,8 @@
-package com.example.lamforgallery
+package com.example.lamforgallery.ui
 
-import android.Manifest
-import android.app.Activity.RESULT_OK
 import android.content.IntentSender
-import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Bundle
 import android.util.Log
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.result.IntentSenderRequest
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,9 +10,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,121 +24,21 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
-import coil.compose.AsyncImage // <-- NEW IMPORT
+import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
-import java.util.UUID
 
-// Your existing MainActivity class ...
-class MainActivity : ComponentActivity() {
-
-    private val TAG = "MainActivity"
-
-    private val viewModel: AgentViewModel by viewModels {
-        AgentViewModelFactory(application)
-    }
-
-    // --- READ PERMISSION ---
-    private val permissionToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        Manifest.permission.READ_MEDIA_IMAGES
-    } else {
-        Manifest.permission.READ_EXTERNAL_STORAGE
-    }
-    private var isPermissionGranted by mutableStateOf(false)
-    private val requestPermissionLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { isGranted: Boolean ->
-            isPermissionGranted = isGranted
-        }
-    // --- END READ PERMISSION ---
-
-
-    // --- MODIFY PERMISSIONS (GENERALIZED) ---
-    private var currentPermissionType: PermissionType? = null
-    private val permissionRequestLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.StartIntentSenderForResult()
-        ) { activityResult ->
-            val type = currentPermissionType
-            if (type == null) {
-                Log.e(TAG, "permissionRequestLauncher result but currentPermissionType is null!")
-                return@registerForActivityResult
-            }
-
-            val wasSuccessful = activityResult.resultCode == RESULT_OK
-            Log.d(TAG, "Permission result for $type: ${if (wasSuccessful) "GRANTED" else "DENIED"}")
-            viewModel.onPermissionResult(wasSuccessful, type)
-            currentPermissionType = null
-        }
-    // --- END MODIFY PERMISSIONS ---
-
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        checkAndRequestPermission()
-
-        setContent {
-            MaterialTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    if (isPermissionGranted) {
-                        AgentScreen(
-                            viewModel = viewModel,
-                            onLaunchPermissionRequest = { intentSender, type ->
-                                Log.d(TAG, "Launching permissionRequestLauncher for $type...")
-                                currentPermissionType = type
-                                permissionRequestLauncher.launch(
-                                    IntentSenderRequest.Builder(intentSender).build()
-                                )
-                            }
-                        )
-                    } else {
-                        PermissionDeniedScreen {
-                            requestPermissionLauncher.launch(permissionToRequest)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private fun checkAndRequestPermission() {
-        when {
-            ContextCompat.checkSelfPermission(
-                this,
-                permissionToRequest
-            ) == PackageManager.PERMISSION_GRANTED -> {
-                Log.d(TAG, "Permission already granted.")
-                isPermissionGranted = true
-            }
-            shouldShowRequestPermissionRationale(permissionToRequest) -> {
-                requestPermissionLauncher.launch(permissionToRequest)
-            }
-            else -> {
-                requestPermissionLauncher.launch(permissionToRequest)
-            }
-        }
-    }
-}
-
+/**
+ * This file now contains our entire Chat UI, decoupled from MainActivity.
+ */
 
 @Composable
-fun AgentScreen( // <-- FUNCTION SIGNATURE UPDATED
+fun AgentScreen(
     viewModel: AgentViewModel,
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-
-    // Get the selection state and toggle function
-    val selectedUris = uiState.selectedImageUris
-    val onToggleImageSelection = viewModel::toggleImageSelection
 
     // This effect will watch for a new RequiresPermission state
     LaunchedEffect(uiState.currentStatus) {
@@ -170,58 +62,67 @@ fun AgentScreen( // <-- FUNCTION SIGNATURE UPDATED
         bottomBar = {
             ChatInputBar(
                 status = uiState.currentStatus,
-                selectionCount = selectedUris.size, // <-- PASS SELECTION COUNT
+                selectionCount = uiState.selectedImageUris.size,
                 onSend = { inputText ->
                     viewModel.sendUserInput(inputText)
                 }
             )
         }
     ) { paddingValues ->
+        // This is our main chat content area
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
+                .padding(paddingValues) // Apply padding from the Scaffold
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.Bottom
+            verticalArrangement = Arrangement.Bottom // Stick to bottom
         ) {
-            item { Spacer(modifier = Modifier.height(16.dp)) }
+            // Add a spacer to push content up when list is short
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+            }
 
             // Render each chat message
             items(uiState.messages, key = { it.id }) { message ->
-                ChatMessageItem( // <-- COMPOSABLE UPDATED
+                ChatMessageItem(
                     message = message,
-                    selectedUris = selectedUris,
-                    onToggleImageSelection = onToggleImageSelection
+                    isSelected = { uri -> uiState.selectedImageUris.contains(uri) },
+                    onToggleSelection = { uri -> viewModel.toggleImageSelection(uri) }
                 )
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            item { Spacer(modifier = Modifier.height(16.dp)) }
+            // Add a final spacer for padding at the bottom
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+            }
         }
     }
 }
 
 /**
- * Renders a single chat message.
- * UPDATED to handle selection.
+ * Renders a single chat message with different styling
+ * for USER, AGENT, and ERROR.
+ * NEW: Now handles selection.
  */
 @Composable
-fun ChatMessageItem( // <-- FUNCTION SIGNATURE UPDATED
+fun ChatMessageItem(
     message: ChatMessage,
-    selectedUris: Set<String>,
-    onToggleImageSelection: (String) -> Unit
+    isSelected: (String) -> Boolean,
+    onToggleSelection: (String) -> Unit
 ) {
-    // ... (Your existing alignment and color logic is unchanged) ...
     val horizontalAlignment = when (message.sender) {
         Sender.USER -> Alignment.End
         Sender.AGENT, Sender.ERROR -> Alignment.Start
     }
+
     val backgroundColor = when (message.sender) {
         Sender.USER -> MaterialTheme.colorScheme.primaryContainer
         Sender.AGENT -> MaterialTheme.colorScheme.secondaryContainer
         Sender.ERROR -> MaterialTheme.colorScheme.errorContainer
     }
+
     val textColor = when (message.sender) {
         Sender.USER -> MaterialTheme.colorScheme.onPrimaryContainer
         Sender.AGENT -> MaterialTheme.colorScheme.onSecondaryContainer
@@ -234,63 +135,69 @@ fun ChatMessageItem( // <-- FUNCTION SIGNATURE UPDATED
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.8f)
+                .fillMaxWidth(0.8f) // Max 80% width
                 .background(backgroundColor, RoundedCornerShape(12.dp))
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
+            Column(modifier = Modifier.padding(12.dp)) { // Wrap in Column to stack text and images
                 Text(
                     text = message.text,
                     color = textColor,
                     style = MaterialTheme.typography.bodyLarge,
                 )
 
-                // --- UPDATED IMAGE DISPLAY LOGIC ---
+                // --- IMAGE DISPLAY LOGIC ---
                 message.imageUris?.let { uris ->
                     if (uris.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(8.dp))
 
+                        // Use a horizontal row for multiple images, or a single image view
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            uris.take(3).forEach { uri ->
-                                val isSelected = selectedUris.contains(uri) // Check if selected
-
+                            uris.take(4).forEach { uri -> // Show up to 4 images
+                                val isSelected = isSelected(uri)
                                 Box(
-                                    modifier = Modifier.clickable { onToggleImageSelection(uri) } // Make it clickable
+                                    modifier = Modifier
+                                        .size(90.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { onToggleSelection(uri) } // <-- MAKE IT CLICKABLE
+                                        .then(
+                                            if (isSelected) Modifier.border( // <-- SHOW BORDER
+                                                BorderStroke(3.dp, MaterialTheme.colorScheme.primary),
+                                                RoundedCornerShape(8.dp)
+                                            ) else Modifier
+                                        )
                                 ) {
                                     AsyncImage(
                                         model = uri,
                                         contentDescription = "Image from agent",
                                         contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .size(90.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            // Add a border if selected
-                                            .border(
-                                                width = if (isSelected) 3.dp else 0.dp,
-                                                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                                shape = RoundedCornerShape(8.dp)
-                                            )
+                                        modifier = Modifier.fillMaxSize()
                                     )
-
-                                    // Show a checkmark icon if selected
                                     if (isSelected) {
-                                        Icon(
-                                            imageVector = Icons.Filled.CheckCircle,
-                                            contentDescription = "Selected",
-                                            tint = MaterialTheme.colorScheme.primary,
+                                        // --- SHOW CHECKMARK ---
+                                        Box(
                                             modifier = Modifier
-                                                .align(Alignment.TopEnd)
                                                 .padding(4.dp)
-                                                .background(Color.White, RoundedCornerShape(10.dp))
-                                        )
+                                                .align(Alignment.TopEnd)
+                                                .size(20.dp)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.primary),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = "Selected",
+                                                tint = MaterialTheme.colorScheme.onPrimary,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
-
-                            // ... (The "+X" indicator logic is unchanged) ...
-                            if (uris.size > 3) {
+                            if (uris.size > 4) {
+                                // Add a simple indicator if there are more images
                                 Box(
                                     modifier = Modifier
                                         .size(90.dp)
@@ -299,7 +206,7 @@ fun ChatMessageItem( // <-- FUNCTION SIGNATURE UPDATED
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        text = "+${uris.size - 3}",
+                                        text = "+${uris.size - 4}",
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         style = MaterialTheme.typography.titleMedium
                                     )
@@ -308,7 +215,7 @@ fun ChatMessageItem( // <-- FUNCTION SIGNATURE UPDATED
                         }
                     }
                 }
-                // --- END UPDATED IMAGE DISPLAY LOGIC ---
+                // --- END IMAGE DISPLAY LOGIC ---
             }
         }
     }
@@ -316,10 +223,10 @@ fun ChatMessageItem( // <-- FUNCTION SIGNATURE UPDATED
 
 /**
  * The bottom bar with the text field and send button.
- * UPDATED to show selection count.
+ * NEW: Shows selection count.
  */
 @Composable
-fun ChatInputBar( // <-- FUNCTION SIGNATURE UPDATED
+fun ChatInputBar(
     status: AgentStatus,
     selectionCount: Int,
     onSend: (String) -> Unit
@@ -342,7 +249,6 @@ fun ChatInputBar( // <-- FUNCTION SIGNATURE UPDATED
         ) {
             when (status) {
                 is AgentStatus.Loading -> {
-                    // ... (Unchanged)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(8.dp))
@@ -350,7 +256,6 @@ fun ChatInputBar( // <-- FUNCTION SIGNATURE UPDATED
                     }
                 }
                 is AgentStatus.RequiresPermission -> {
-                    // ... (Unchanged)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(8.dp))
@@ -358,16 +263,15 @@ fun ChatInputBar( // <-- FUNCTION SIGNATURE UPDATED
                     }
                 }
                 is AgentStatus.Idle -> {
-                    // --- NEW: SHOW SELECTION COUNT ---
                     if (selectionCount > 0) {
+                        // --- SHOW SELECTION COUNT ---
                         Text(
-                            text = "$selectionCount image${if (selectionCount > 1) "s" else ""} selected",
+                            "$selectionCount image(s) selected",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    // --- END NEW ---
                 }
             }
         }
@@ -376,7 +280,6 @@ fun ChatInputBar( // <-- FUNCTION SIGNATURE UPDATED
         Spacer(modifier = Modifier.height(8.dp))
 
         // --- INPUT ROW ---
-        // (Unchanged)
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -390,13 +293,17 @@ fun ChatInputBar( // <-- FUNCTION SIGNATURE UPDATED
                 singleLine = true,
                 enabled = isEnabled
             )
+
             Spacer(modifier = Modifier.width(8.dp))
+
             Button(
                 onClick = {
                     onSend(inputText)
                     inputText = ""
                 },
-                enabled = isEnabled && (inputText.isNotBlank() || selectionCount > 0), // <-- Allow send if text OR selection
+                // --- UPDATE ENABLED LOGIC ---
+                // Can send if text OR selection is present
+                enabled = isEnabled && (inputText.isNotBlank() || selectionCount > 0),
                 modifier = Modifier.height(56.dp)
             ) {
                 Text("Send")
@@ -408,7 +315,6 @@ fun ChatInputBar( // <-- FUNCTION SIGNATURE UPDATED
 
 @Composable
 fun PermissionDeniedScreen(onRequestPermission: () -> Unit) {
-    // (Unchanged)
     Box(
         modifier = Modifier.fillMaxSize().padding(32.dp),
         contentAlignment = Alignment.Center
