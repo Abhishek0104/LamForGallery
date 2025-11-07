@@ -22,23 +22,27 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-// --- NEW STATE DEFINITIONS ---
+// --- STATE DEFINITIONS ---
 
 /**
- * Represents one message in the chat
- * NEW: Added optional imageUris list
+ * Represents one message in the chat.
+ * Includes optional image URIs for display.
  */
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val text: String,
     val sender: Sender,
-    val imageUris: List<String>? = null // <-- NEW FIELD
+    val imageUris: List<String>? = null
 )
 
 enum class Sender {
     USER, AGENT, ERROR
 }
 
+/**
+ * Represents the current *status* of the agent
+ * (Loading, Waiting for Permission, or Idle)
+ */
 sealed class AgentStatus {
     data class Loading(val message: String) : AgentStatus()
     data class RequiresPermission(
@@ -49,15 +53,18 @@ sealed class AgentStatus {
     object Idle : AgentStatus()
 }
 
+/**
+ * The single, combined UI state, including the user's selection.
+ */
 data class AgentUiState(
     val messages: List<ChatMessage> = emptyList(),
     val currentStatus: AgentStatus = AgentStatus.Idle,
-    val selectedImageUris: Set<String> = emptySet()
+    val selectedImageUris: Set<String> = emptySet() // <-- Holds the user's selection
 )
 
 enum class PermissionType { DELETE, WRITE }
 
-// --- END NEW STATE ---
+// --- END STATE ---
 
 
 class AgentViewModel(
@@ -78,6 +85,9 @@ class AgentViewModel(
     private val _uiState = MutableStateFlow(AgentUiState())
     val uiState: StateFlow<AgentUiState> = _uiState.asStateFlow()
 
+    /**
+     * Called by the UI when a user taps an image.
+     */
     fun toggleImageSelection(uri: String) {
         _uiState.update { currentState ->
             val newSelection = currentState.selectedImageUris.toMutableSet()
@@ -88,43 +98,44 @@ class AgentViewModel(
             }
             currentState.copy(selectedImageUris = newSelection)
         }
-        Log.d(TAG, "New selection: ${uiState.value.selectedImageUris}")
     }
+
+    /**
+     * Called by the UI when the user hits "Send".
+     */
     fun sendUserInput(input: String) {
-        if (_uiState.value.currentStatus !is AgentStatus.Idle) {
+        val currentState = _uiState.value
+        if (currentState.currentStatus !is AgentStatus.Idle) {
             Log.w(TAG, "Agent is busy, ignoring input.")
             return
         }
 
-        viewModelScope.launch {
-            // Get the current selection *before* clearing it
-            val selection = _uiState.value.selectedImageUris
+        // Get the current selection and clear it
+        val selectedUris = currentState.selectedImageUris.toList()
+        _uiState.update { it.copy(selectedImageUris = emptySet()) } // Clear selection
 
+        viewModelScope.launch {
             // 1. Add the user's message to the chat list
-            // We show the *original* text, not the augmented version
             addMessage(ChatMessage(text = input, sender = Sender.USER))
 
-            // 2. Set the status to Loading & clear selection
+            // 2. Set the status to Loading
             setStatus(AgentStatus.Loading("Thinking..."))
-            clearSelection()
 
-            // 3. Send to agent (with the selection)
+            // 3. Send to agent (WITH the selected URIs)
             val request = AgentRequest(
                 sessionId = currentSessionId,
                 userInput = input,
                 toolResult = null,
-                selectedUris = selection.toList() // <-- SEND SELECTION
+                selectedUris = selectedUris.ifEmpty { null } // Send null if empty
             )
-
-            Log.d(TAG, "Sending user input: $input, with ${selection.size} selected URIs")
+            Log.d(TAG, "Sending user input: $input, selection: $selectedUris")
             handleAgentRequest(request)
         }
     }
 
-    private fun clearSelection() {
-        _uiState.update { it.copy(selectedImageUris = emptySet()) }
-    }
-
+    /**
+     * Called by the Activity when a permission dialog (delete/move) returns.
+     */
     fun onPermissionResult(wasSuccessful: Boolean, type: PermissionType) {
         val toolCallId = pendingToolCallId
         val args = pendingToolArgs
@@ -141,7 +152,6 @@ class AgentViewModel(
         viewModelScope.launch {
             if (!wasSuccessful) {
                 Log.w(TAG, "User denied permission for $type")
-                // Use named arguments
                 addMessage(ChatMessage(text = "User denied permission.", sender = Sender.ERROR))
                 sendToolResult(gson.toJson(false), toolCallId)
                 return@launch
@@ -175,6 +185,9 @@ class AgentViewModel(
         }
     }
 
+    /**
+     * The main agent loop logic.
+     */
     private suspend fun handleAgentRequest(request: AgentRequest) {
         try {
             val response = agentApi.invokeAgent(request)
@@ -199,7 +212,6 @@ class AgentViewModel(
                     // Set status to "Loading" with the tool name
                     setStatus(AgentStatus.Loading("Working on it: ${action.name}..."))
 
-                    // --- MODIFIED to get an object, not just a string ---
                     val toolResultObject = executeLocalTool(action)
 
                     // executeLocalTool returns null if it pauses for permission
@@ -222,13 +234,13 @@ class AgentViewModel(
     }
 
     /**
-     * Executes a tool and returns the raw result object (e.g., List<String>, String, Boolean).
-     * Returns null if the tool pauses for permission.
-     * * NEW: We also add image URIs to the agent's message *before* sending the result.
+     * This is the "nervous system." It calls the correct Kotlin function
+     * based on the agent's tool request.
      */
     private suspend fun executeLocalTool(toolCall: ToolCall): Any? {
         // Simple check for Android version
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R && toolCall.name != "search_photos") {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
+            (toolCall.name == "delete_photos" || toolCall.name == "move_photos_to_album")) {
             Log.w(TAG, "Skipping ${toolCall.name}, requires Android 11+")
             return mapOf("error" to "Modify/Delete operations require Android 11+")
         }
@@ -239,27 +251,23 @@ class AgentViewModel(
                     val query = toolCall.args["query"] as? String ?: ""
                     val uris = galleryTools.searchPhotos(query)
 
-                    // --- NEW LOGIC ---
                     // Add an agent message *with* the image URIs
                     val message = "I found ${uris.size} photos for you."
                     addMessage(ChatMessage(text = message, sender = Sender.AGENT, imageUris = uris))
-                    // --- END NEW LOGIC ---
 
                     uris // This is the return value
                 }
                 "delete_photos" -> {
-                    val uris = toolCall.args["photo_uris"] as? List<String> ?: emptyList()
+                    // Use helper to get URIs from args OR user selection
+                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
                     val intentSender = galleryTools.createDeleteIntentSender(uris)
 
                     if (intentSender != null) {
                         pendingToolCallId = toolCall.id
                         pendingToolArgs = null // Delete has no second step
 
-                        // Set the status to RequiresPermission
                         setStatus(AgentStatus.RequiresPermission(
-                            intentSender,
-                            PermissionType.DELETE,
-                            "Waiting for user permission to delete..."
+                            intentSender, PermissionType.DELETE, "Waiting for user permission to delete..."
                         ))
                         null // Return null to pause the loop
                     } else {
@@ -267,18 +275,17 @@ class AgentViewModel(
                     }
                 }
                 "move_photos_to_album" -> {
-                    val uris = toolCall.args["photo_uris"] as? List<String> ?: emptyList()
+                    // Use helper to get URIs from args OR user selection
+                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
                     val intentSender = galleryTools.createWriteIntentSender(uris)
 
                     if (intentSender != null) {
+                        // Pass *all* args (including uris and album_name)
                         pendingToolCallId = toolCall.id
-                        pendingToolArgs = toolCall.args // Save args for step 2
+                        pendingToolArgs = toolCall.args
 
-                        // Set the status to RequiresPermission
                         setStatus(AgentStatus.RequiresPermission(
-                            intentSender,
-                            PermissionType.WRITE,
-                            "Waiting for user permission to move files..."
+                            intentSender, PermissionType.WRITE, "Waiting for user permission to move files..."
                         ))
                         null // Return null to pause the loop
                     } else {
@@ -286,18 +293,38 @@ class AgentViewModel(
                     }
                 }
                 "create_collage" -> {
-                    val uris = toolCall.args["photo_uris"] as? List<String> ?: emptyList()
+                    // Use helper to get URIs from args OR user selection
+                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
                     val title = toolCall.args["title"] as? String ?: "My Collage"
                     val newCollageUri = galleryTools.createCollage(uris, title)
 
-                    // --- NEW LOGIC ---
                     val message = "I've created the collage '$title' for you."
                     val imageList = if (newCollageUri != null) listOf(newCollageUri) else null
                     addMessage(ChatMessage(text = message, sender = Sender.AGENT, imageUris = imageList))
-                    // --- END NEW LOGIC ---
 
-                    newCollageUri // This is the return value
+                    newCollageUri
                 }
+
+                // --- NEW CASE ADDED ---
+                "apply_filter" -> {
+                    // Use helper to get URIs from args OR user selection
+                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
+                    val filterName = toolCall.args["filter_name"] as? String ?: "grayscale"
+
+                    val newImageUris = galleryTools.applyFilter(uris, filterName)
+
+                    // Add a chat message showing the NEWLY created images
+                    val message = "I've applied the '$filterName' filter to ${newImageUris.size} photo(s)."
+                    addMessage(ChatMessage(
+                        text = message,
+                        sender = Sender.AGENT,
+                        imageUris = newImageUris // Show the new images
+                    ))
+
+                    newImageUris // Return the new URIs to the agent
+                }
+                // --- END NEW CASE ---
+
                 else -> {
                     Log.w(TAG, "Unknown tool called: ${toolCall.name}")
                     mapOf("error" to "Tool '${toolCall.name}' is not implemented on this client.")
@@ -312,6 +339,24 @@ class AgentViewModel(
         return result
     }
 
+    /**
+     * Helper to get URIs either from the tool args or the user's selection.
+     */
+    private fun getUrisFromArgsOrSelection(argUris: Any?): List<String> {
+        val selectedUris = _uiState.value.selectedImageUris
+
+        // 1. Prioritize user's explicit selection
+        if (selectedUris.isNotEmpty()) {
+            return selectedUris.toList()
+        }
+
+        // 2. Fall back to the agent's provided arguments
+        return (argUris as? List<String>) ?: emptyList()
+    }
+
+    /**
+     * Sends the tool result back to the agent.
+     */
     private fun sendToolResult(resultJsonString: String, toolCallId: String) {
         viewModelScope.launch {
             setStatus(AgentStatus.Loading("Sending result to agent..."))
@@ -323,8 +368,9 @@ class AgentViewModel(
 
             val request = AgentRequest(
                 sessionId = currentSessionId,
-                userInput = null, // Not user input
-                toolResult = toolResult
+                userInput = null,
+                toolResult = toolResult,
+                selectedUris = null // Not needed when sending a tool result
             )
 
             Log.d(TAG, "Sending tool result: $resultJsonString")
@@ -356,17 +402,17 @@ class AgentViewModelFactory(
 
     // Create a singleton instance of Gson
     private val gson: Gson by lazy {
-        Gson()
+        NetworkModule.gson // Use the Gson from NetworkModule
     }
 
     // Create a singleton instance of GalleryTools
     private val galleryTools: GalleryTools by lazy {
-        GalleryTools(application)
+        GalleryTools(application.contentResolver) // Pass Application context
     }
 
     // Create a singleton instance of AgentApiService
     private val agentApi: AgentApiService by lazy {
-        NetworkModule.apiService
+        NetworkModule.apiService // Use the apiService from NetworkModule
     }
 
     @Suppress("UNCHECKED_CAST")
