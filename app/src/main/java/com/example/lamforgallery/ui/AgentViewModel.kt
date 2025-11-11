@@ -230,21 +230,31 @@ class AgentViewModel(
                         return@launch
                     }
 
-                    val uris = args["photo_uris"] as? List<String> ?: emptyList()
+                    val urisToDelete = args["photo_uris"] as? List<String> ?: emptyList()
 
                     // Delete from database in the background
                     withContext(Dispatchers.IO) {
                         try {
-                            uris.forEach { uri ->
+                            urisToDelete.forEach { uri ->
                                 imageEmbeddingDao.deleteByUri(uri)
                             }
-                            Log.d(TAG, "Deleted ${uris.size} embeddings from database.")
+                            Log.d(TAG, "Deleted ${urisToDelete.size} embeddings from database.")
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to delete embeddings from DB", e)
                             // Don't block the agent, just log the error
                         }
                     }
-                    // --- END FIX ---
+                    // 2. Clean up local UI state (prevents black box on re-search)
+                    _uiState.update { currentState ->
+                        currentState.copy(
+                            selectedImageUris = currentState.selectedImageUris - urisToDelete.toSet(),
+                            selectionSheetUris = currentState.selectionSheetUris - urisToDelete.toSet()
+                        )
+                    }
+
+                    // 3. Signal to other ViewModels (like EmbeddingViewModel) to refresh their count
+                    _galleryDidChange.emit(Unit)
+                    // --- END FIX/UPDATE ---
 
                     sendToolResult(gson.toJson(true), toolCallId)
                     _galleryDidChange.emit(Unit)

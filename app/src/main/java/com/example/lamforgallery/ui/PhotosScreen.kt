@@ -95,7 +95,7 @@ class PhotosViewModel(
             _uiState.update {
                 it.copy(
                     isLoading = false,
-                    photos = it.photos + newPhotos, // Append new photos
+                    photos = (it.photos + newPhotos).distinct(),  // Append new photos
                     page = it.page + 1,
                     canLoadMore = newPhotos.isNotEmpty() // If we got no photos, we're at the end
                 )
