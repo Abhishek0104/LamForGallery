@@ -37,6 +37,8 @@ import com.example.lamforgallery.ml.ImageEncoder
 import com.example.lamforgallery.ml.TextEncoder
 import android.graphics.Bitmap // <-- Import Bitmap
 import android.graphics.Color // <-- Import Color
+import com.example.lamforgallery.database.AppDatabase
+import com.example.lamforgallery.database.ImageEmbedding
 
 class MainActivity : ComponentActivity() {
 
@@ -106,72 +108,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-//        Log.d("TokenizerTest", "Starting ClipTokenizer test...")
-//        val tokenizer = ClipTokenizer(applicationContext)
-//
-//        val text1 = "a photo of a dog"
-//        val tokens1 = tokenizer.tokenize(text1)
-//        Log.d("TokenizerTest", "Tokens (first 10): ${tokens1.take(10).joinToString()}")
-//
-//        val text2 = "a cat in a box"
-//        val tokens2 = tokenizer.tokenize(text2)
-//        Log.d("TokenizerTest", "Tokens (first 10): ${tokens2.take(10).joinToString()}")
-//        // --- End Tokenizer Test ---
-//
-//
-//        // --- START TextEncoder TEST BLOCK ---
-//        Log.d("TextEncoderTest", "Starting TextEncoder test...")
-//        try {
-//            // 1. Instantiate the encoder
-//            // This loads the .ort model from assets
-//            val textEncoder = TextEncoder(applicationContext)
-//            Log.d("TextEncoderTest", "TextEncoder initialized.")
-//
-//            // 2. Encode the tokens from the first test
-//            val embedding1 = textEncoder.encode(tokens1)
-//
-//            // 3. Log the results
-//            Log.d("TextEncoderTest", "--- Test 1: '$text1' ---")
-//            Log.d("TextEncoderTest", "Embedding generated! Size: ${embedding1.size}")
-//            Log.d("TextEncoderTest", "Embedding sample (first 5): ${embedding1.take(5).joinToString()}")
-//
-//            // 4. Encode the tokens from the second test
-//            val embedding2 = textEncoder.encode(tokens2)
-//
-//            // 5. Log the results
-//            Log.d("TextEncoderTest", "--- Test 2: '$text2' ---")
-//            Log.d("TextEncoderTest", "Embedding generated! Size: ${embedding2.size}")
-//            Log.d("TextEncoderTest", "Embedding sample (first 5): ${embedding2.take(5).joinToString()}")
-//
-//
-//        } catch (e: Exception) {
-//            // If this fails, it's likely the .ort file is missing or corrupt
-//            Log.e("TextEncoderTest", "TextEncoder test FAILED: ${e.message}", e)
-//        }
-//
-//        // --- START ImageEncoder TEST BLOCK ---
-//        Log.d("ImageEncoderTest", "Starting ImageEncoder test...")
-//        try {
-//            // 1. Create a dummy test bitmap (e.g., a 224x224 red square)
-//            val testBitmap = Bitmap.createBitmap(224, 224, Bitmap.Config.ARGB_8888)
-//            testBitmap.eraseColor(Color.RED)
-//            Log.d("ImageEncoderTest", "Dummy test bitmap created.")
-//
-//            // 2. Instantiate the encoder
-//            val imageEncoder = ImageEncoder(applicationContext)
-//            Log.d("ImageEncoderTest", "ImageEncoder initialized.")
-//
-//            // 3. Encode the bitmap
-//            val embedding = imageEncoder.encode(testBitmap)
-//
-//            // 4. Log the results
-//            Log.d("ImageEncoderTest", "--- Test 1: Dummy Red Bitmap ---")
-//            Log.d("ImageEncoderTest", "Embedding generated! Size: ${embedding.size}")
-//            Log.d("ImageEncoderTest", "Embedding sample (first 5): ${embedding.take(5).joinToString()}")
-//
-//        } catch (e: Exception) {
-//            Log.e("ImageEncoderTest", "ImageEncoder test FAILED: ${e.message}", e)
-//        }
+
         setContent {
             MaterialTheme {
                 Surface(
