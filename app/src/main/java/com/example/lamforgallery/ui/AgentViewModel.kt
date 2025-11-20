@@ -59,7 +59,7 @@ sealed class AgentStatus {
 data class AgentUiState(
     val messages: List<ChatMessage> = emptyList(),
     val currentStatus: AgentStatus = AgentStatus.Idle,
-    val selectedImageUris: Set<String> = emptySet(), // Holds the *final* selection
+    val selectedImageUris: Set<String> = emptySet(),
 
     // --- STATE FOR THE BOTTOM SHEET ---
     val isSelectionSheetOpen: Boolean = false,
@@ -95,9 +95,6 @@ class AgentViewModel(
 
     private data class SearchResult(val uri: String, val similarity: Float)
 
-    /**
-     * Called by the UI when a user taps an image *in the chat bubble*.
-     */
     fun toggleImageSelection(uri: String) {
         _uiState.update { currentState ->
             val newSelection = currentState.selectedImageUris.toMutableSet()
@@ -110,17 +107,12 @@ class AgentViewModel(
         }
     }
 
-    // --- NEW: ALLOW EXTERNAL SELECTION (Gallery to Agent) ---
     fun setExternalSelection(uris: List<String>) {
         _uiState.update {
             it.copy(selectedImageUris = uris.toSet())
         }
-        // Optional: Add a system message or prompt to guide the user?
-        // For now, we rely on the UI showing "X images selected"
     }
-    // --- END NEW ---
 
-    // --- FUNCTIONS FOR BOTTOM SHEET ---
     fun openSelectionSheet(uris: List<String>) {
         _uiState.update {
             it.copy(
@@ -148,7 +140,6 @@ class AgentViewModel(
             )
         }
     }
-    // --- END BOTTOM SHEET FUNCTIONS ---
 
 
     fun sendUserInput(input: String) {
@@ -158,9 +149,8 @@ class AgentViewModel(
             return
         }
 
-        // Get the current selection and clear it
         val selectedUris = currentState.selectedImageUris.toList()
-        _uiState.update { it.copy(selectedImageUris = emptySet()) } // Clear selection
+        _uiState.update { it.copy(selectedImageUris = emptySet()) }
 
         viewModelScope.launch {
             addMessage(ChatMessage(text = input, sender = Sender.USER))
@@ -172,7 +162,6 @@ class AgentViewModel(
                 toolResult = null,
                 selectedUris = selectedUris.ifEmpty { null }
             )
-            Log.d(TAG, "Sending user input: $input, selection: $selectedUris")
             handleAgentRequest(request)
         }
     }
@@ -181,16 +170,12 @@ class AgentViewModel(
         val toolCallId = pendingToolCallId
         val args = pendingToolArgs
 
-        if (toolCallId == null) {
-            Log.e(TAG, "onPermissionResult called but no pending tool call!")
-            return
-        }
+        if (toolCallId == null) return
 
         viewModelScope.launch {
             pendingToolCallId = null
             pendingToolArgs = null
             if (!wasSuccessful) {
-                Log.w(TAG, "User denied permission for $type")
                 addMessage(ChatMessage(text = "User denied permission.", sender = Sender.ERROR))
                 sendToolResult(gson.toJson(false), toolCallId)
                 return@launch
@@ -198,47 +183,25 @@ class AgentViewModel(
 
             when (type) {
                 PermissionType.DELETE -> {
-                    if (args == null) {
-                        Log.e(TAG, "Delete permission granted but no pending args!")
-                        addMessage(ChatMessage(text = "Error: Missing context for delete operation.", sender = Sender.ERROR))
-                        sendToolResult(gson.toJson(false), toolCallId)
-                        return@launch
-                    }
-
-                    val urisToDelete = args["photo_uris"] as? List<String> ?: emptyList()
-
-                    // Delete from database in the background
+                    val urisToDelete = args?.get("photo_uris") as? List<String> ?: emptyList()
                     withContext(Dispatchers.IO) {
                         try {
-                            urisToDelete.forEach { uri ->
-                                imageEmbeddingDao.deleteByUri(uri)
-                            }
-                            Log.d(TAG, "Deleted ${urisToDelete.size} embeddings from database.")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to delete embeddings from DB", e)
-                        }
+                            urisToDelete.forEach { uri -> imageEmbeddingDao.deleteByUri(uri) }
+                        } catch (e: Exception) { Log.e(TAG, "DB delete failed", e) }
                     }
-
                     _uiState.update { currentState ->
                         currentState.copy(
                             selectedImageUris = currentState.selectedImageUris - urisToDelete.toSet(),
                             selectionSheetUris = currentState.selectionSheetUris - urisToDelete.toSet()
                         )
                     }
-
                     sendToolResult(gson.toJson(true), toolCallId)
                     _galleryDidChange.emit(Unit)
                 }
                 PermissionType.WRITE -> {
-                    if (args == null) {
-                        Log.e(TAG, "Write permission granted but no pending args!")
-                        addMessage(ChatMessage(text = "Error: Missing context for move operation.", sender = Sender.ERROR))
-                        sendToolResult(gson.toJson(false), toolCallId)
-                        return@launch
-                    }
                     setStatus(AgentStatus.Loading("Moving files..."))
-                    val uris = args["photo_uris"] as? List<String> ?: emptyList()
-                    val album = args["album_name"] as? String ?: "New Album"
+                    val uris = args?.get("photo_uris") as? List<String> ?: emptyList()
+                    val album = args?.get("album_name") as? String ?: "New Album"
                     val moveResult = galleryTools.performMoveOperation(uris, album)
                     sendToolResult(gson.toJson(moveResult), toolCallId)
                     _galleryDidChange.emit(Unit)
@@ -261,26 +224,20 @@ class AgentViewModel(
                 "requires_action" -> {
                     val action = response.nextActions?.firstOrNull()
                     if (action == null) {
-                        Log.e(TAG, "Agent required action but sent none.")
                         addMessage(ChatMessage(text = "Agent error: No action provided.", sender= Sender.ERROR))
                         setStatus(AgentStatus.Idle)
                         return
                     }
 
                     setStatus(AgentStatus.Loading("Working on it: ${action.name}..."))
-
                     val toolResultObject = executeLocalTool(action)
 
                     if (toolResultObject != null) {
-                        val resultJson = gson.toJson(toolResultObject)
-                        sendToolResult(resultJson, action.id)
-                    } else {
-                        Log.d(TAG, "Loop paused, waiting for permission result.")
+                        sendToolResult(gson.toJson(toolResultObject), action.id)
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error in agent loop", e)
             addMessage(ChatMessage(text = e.message ?: "Unknown network error", sender= Sender.ERROR))
             setStatus(AgentStatus.Idle)
         }
@@ -289,7 +246,6 @@ class AgentViewModel(
     private suspend fun executeLocalTool(toolCall: ToolCall): Any? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
             (toolCall.name == "delete_photos" || toolCall.name == "move_photos_to_album")) {
-            Log.w(TAG, "Skipping ${toolCall.name}, requires Android 11+")
             return mapOf("error" to "Modify/Delete operations require Android 11+")
         }
 
@@ -297,96 +253,59 @@ class AgentViewModel(
             when (toolCall.name) {
                 "search_photos" -> {
                     val query = toolCall.args["query"] as? String ?: ""
-                    Log.d(TAG, "Performing SEMANTIC search for: $query")
-
                     val foundUris = withContext(Dispatchers.IO) {
                         val tokens = clipTokenizer.tokenize(query)
                         val textEmbedding = textEncoder.encode(tokens)
                         val allImageEmbeddings = imageEmbeddingDao.getAllEmbeddings()
-
                         val similarityResults = mutableListOf<SearchResult>()
-
                         for (imageEmbedding in allImageEmbeddings) {
-                            val similarity = SimilarityUtil.cosineSimilarity(
-                                textEmbedding,
-                                imageEmbedding.embedding
-                            )
-
+                            val similarity = SimilarityUtil.cosineSimilarity(textEmbedding, imageEmbedding.embedding)
                             if (similarity > 0.2f) {
-                                similarityResults.add(
-                                    SearchResult(imageEmbedding.uri, similarity)
-                                )
+                                similarityResults.add(SearchResult(imageEmbedding.uri, similarity))
                             }
                         }
                         similarityResults.sortByDescending { it.similarity }
                         similarityResults.map { it.uri }
                     }
 
-                    val message: String
                     if (foundUris.isEmpty()) {
-                        message = "I couldn't find any photos matching '$query'."
-                        addMessage(ChatMessage(text = message, sender= Sender.AGENT))
+                        addMessage(ChatMessage(text = "I couldn't find any photos matching '$query'.", sender= Sender.AGENT))
                     } else {
-                        _uiState.update {
-                            it.copy(
-                                isSelectionSheetOpen = true,
-                                selectionSheetUris = foundUris
-                            )
-                        }
-                        message = "I found ${foundUris.size} photos for you. [Tap to view and select]"
+                        // --- CHANGE: DO NOT AUTO OPEN SHEET. JUST SEND MESSAGE. ---
+                        val message = "I found ${foundUris.size} photos for you."
                         addMessage(ChatMessage(
                             text = message,
                             sender = Sender.AGENT,
                             imageUris = foundUris,
-                            hasSelectionPrompt = true
+                            hasSelectionPrompt = true // This tells UI to show the "Grid"
                         ))
                     }
                     mapOf("photos_found" to foundUris.size)
                 }
                 "delete_photos" -> {
                     val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
-                    if (uris.isEmpty()) throw Exception("No photos were selected for deletion.")
-
                     val intentSender = galleryTools.createDeleteIntentSender(uris)
-
                     if (intentSender != null) {
                         pendingToolCallId = toolCall.id
                         pendingToolArgs = mapOf("photo_uris" to uris)
-                        setStatus(AgentStatus.RequiresPermission(
-                            intentSender, PermissionType.DELETE, "Waiting for user permission to delete..."
-                        ))
+                        setStatus(AgentStatus.RequiresPermission(intentSender, PermissionType.DELETE, "Waiting for user permission..."))
                         null
-                    } else {
-                        mapOf("error" to "Could not create delete request.")
-                    }
+                    } else mapOf("error" to "Could not create delete request.")
                 }
                 "move_photos_to_album" -> {
                     val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
-                    if (uris.isEmpty()) throw Exception("No photos were selected to move.")
-
                     val intentSender = galleryTools.createWriteIntentSender(uris)
-
                     if (intentSender != null) {
                         pendingToolCallId = toolCall.id
-                        pendingToolArgs = mapOf(
-                            "photo_uris" to uris,
-                            "album_name" to (toolCall.args["album_name"] as? String ?: "New Album")
-                        )
-                        setStatus(AgentStatus.RequiresPermission(
-                            intentSender, PermissionType.WRITE, "Waiting for user permission to move files..."
-                        ))
+                        pendingToolArgs = mapOf("photo_uris" to uris, "album_name" to (toolCall.args["album_name"] ?: "New Album"))
+                        setStatus(AgentStatus.RequiresPermission(intentSender, PermissionType.WRITE, "Waiting for user permission..."))
                         null
-                    } else {
-                        mapOf("error" to "Could not create write/move request.")
-                    }
+                    } else mapOf("error" to "Could not create write request.")
                 }
                 "create_collage" -> {
                     val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
-                    if (uris.isEmpty()) throw Exception("No photos were selected for the collage.")
-
                     val title = toolCall.args["title"] as? String ?: "My Collage"
                     val newCollageUri = galleryTools.createCollage(uris, title)
-
                     val message = "I've created the collage '$title' for you."
                     val imageList = if (newCollageUri != null) listOf(newCollageUri) else null
                     addMessage(ChatMessage(text = message, sender= Sender.AGENT, imageUris = imageList))
@@ -395,97 +314,48 @@ class AgentViewModel(
                 }
                 "apply_filter" -> {
                     val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
-                    if (uris.isEmpty()) throw Exception("No photos were selected to apply a filter.")
-
                     val filterName = toolCall.args["filter_name"] as? String ?: "grayscale"
                     val newImageUris = galleryTools.applyFilter(uris, filterName)
-
-                    val message: String
-                    if (newImageUris.isEmpty()) {
-                        message = "I wasn't able to apply the filter to the selected photos."
-                        addMessage(ChatMessage(text = message, sender = Sender.ERROR))
-                    } else {
-                        _uiState.update {
-                            it.copy(
-                                isSelectionSheetOpen = true,
-                                selectionSheetUris = newImageUris
-                            )
-                        }
-                        message = "I've applied the '$filterName' filter to ${newImageUris.size} photo(s). [Tap to view]"
-                        addMessage(ChatMessage(
-                            text = message,
-                            sender = Sender.AGENT,
-                            imageUris = newImageUris,
-                            hasSelectionPrompt = true
-                        ))
-                    }
-                    if (newImageUris.isNotEmpty()) {
-                        viewModelScope.launch { _galleryDidChange.emit(Unit) }
-                    }
+                    val message = "I've applied the '$filterName' filter."
+                    addMessage(ChatMessage(text = message, sender = Sender.AGENT, imageUris = newImageUris, hasSelectionPrompt = true))
+                    if (newImageUris.isNotEmpty()) viewModelScope.launch { _galleryDidChange.emit(Unit) }
                     newImageUris
                 }
-
-                // --- NEW TOOL HANDLER ---
                 "get_photo_metadata" -> {
                     val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
-                    if (uris.isEmpty()) throw Exception("No photos were selected to check metadata.")
-
                     val metadataSummary = galleryTools.getPhotoMetadata(uris)
-
-                    // We return the raw text to the Agent so it can summarize/chat about it
                     mapOf("metadata_summary" to metadataSummary)
                 }
-                // --- END NEW HANDLER ---
-
-                else -> {
-                    Log.w(TAG, "Unknown tool called: ${toolCall.name}")
-                    mapOf("error" to "Tool '${toolCall.name}' is not implemented on this client.")
-                }
+                else -> mapOf("error" to "Tool '${toolCall.name}' is not implemented.")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error executing local tool: ${toolCall.name}", e)
             addMessage(ChatMessage(text = "Error: ${e.message}", sender = Sender.ERROR))
-            mapOf("error" to "Failed to execute ${toolCall.name}: ${e.message}")
+            mapOf("error" to "Failed: ${e.message}")
         }
-
         return result
     }
 
     private fun getUrisFromArgsOrSelection(argUris: Any?): List<String> {
         val selectedUris = _uiState.value.selectedImageUris
-
-        if (selectedUris.isNotEmpty()) {
-            return selectedUris.toList()
-        }
-
+        if (selectedUris.isNotEmpty()) return selectedUris.toList()
         return (argUris as? List<String>) ?: emptyList()
     }
 
     private fun sendToolResult(resultJsonString: String, toolCallId: String) {
         viewModelScope.launch {
             setStatus(AgentStatus.Loading("Sending result to agent..."))
-
-            val toolResult = ToolResult(
-                toolCallId = toolCallId,
-                content = resultJsonString
-            )
-
+            val toolResult = ToolResult(toolCallId = toolCallId, content = resultJsonString)
             val request = AgentRequest(
                 sessionId = currentSessionId,
-                userInput = null,
-                toolResult = toolResult,
-                selectedUris = null
+                userInput = null, // --- FIX: Explicitly pass null ---
+                toolResult = toolResult
             )
-
-            Log.d(TAG, "Sending tool result: $resultJsonString")
             handleAgentRequest(request)
         }
     }
 
     private fun addMessage(message: ChatMessage) {
-        _uiState.update { currentState ->
-            currentState.copy(messages = currentState.messages + message)
-        }
+        _uiState.update { currentState -> currentState.copy(messages = currentState.messages + message) }
     }
 
     private fun setStatus(newStatus: AgentStatus) {

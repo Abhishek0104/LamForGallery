@@ -34,6 +34,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 
 // --- Constants ---
 private const val PAGE_SIZE = 60
@@ -94,21 +96,17 @@ class PhotosViewModel(
 @Composable
 fun PhotosScreen(
     viewModel: PhotosViewModel,
-    onSendToAgent: (List<String>) -> Unit // <-- Callback to bridge to Agent
+    onSendToAgent: (List<String>) -> Unit,
+    onPhotoClick: (String) -> Unit // <-- NEW CALLBACK
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val gridState = rememberLazyGridState()
 
-    // --- Local Selection State ---
-    // We manage selection locally within this screen.
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectedPhotos by remember { mutableStateOf(setOf<String>()) }
 
-    // Reset selection if mode is turned off
     LaunchedEffect(isSelectionMode) {
-        if (!isSelectionMode) {
-            selectedPhotos = emptySet()
-        }
+        if (!isSelectionMode) selectedPhotos = emptySet()
     }
 
     LaunchedEffect(gridState) {
@@ -130,9 +128,7 @@ fun PhotosScreen(
             if (isSelectionMode && selectedPhotos.isNotEmpty()) {
                 ExtendedFloatingActionButton(
                     onClick = {
-                        // 1. Send data to callback
                         onSendToAgent(selectedPhotos.toList())
-                        // 2. Turn off selection mode
                         isSelectionMode = false
                     },
                     icon = { Icon(Icons.Default.AutoAwesome, contentDescription = "Agent") },
@@ -158,9 +154,7 @@ fun PhotosScreen(
         }
     ) { paddingValues ->
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues),
+            modifier = Modifier.fillMaxSize().padding(paddingValues),
             contentAlignment = Alignment.Center
         ) {
             if (uiState.photos.isEmpty() && uiState.isLoading) {
@@ -177,23 +171,19 @@ fun PhotosScreen(
                 ) {
                     items(uiState.photos, key = { it }) { photoUri ->
                         val isSelected = selectedPhotos.contains(photoUri)
-
                         Box(modifier = Modifier
                             .aspectRatio(1f)
                             .fillMaxWidth()
                             .combinedClickable(
                                 onClick = {
                                     if (isSelectionMode) {
-                                        // Toggle selection
-                                        selectedPhotos = if (isSelected) {
-                                            selectedPhotos - photoUri
-                                        } else {
-                                            selectedPhotos + photoUri
-                                        }
-                                        // Auto-exit mode if empty? (Optional)
+                                        selectedPhotos = if (isSelected) selectedPhotos - photoUri else selectedPhotos + photoUri
                                         if (selectedPhotos.isEmpty()) isSelectionMode = false
                                     } else {
-                                        // Standard click (maybe open fullscreen in future)
+                                        // --- NAVIGATE TO SINGLE PHOTO SCREEN ---
+                                        // We must encode the URI to safely pass it in navigation route
+                                        val encodedUri = URLEncoder.encode(photoUri, StandardCharsets.UTF_8.name())
+                                        onPhotoClick(encodedUri)
                                     }
                                 },
                                 onLongClick = {
@@ -210,55 +200,26 @@ fun PhotosScreen(
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
                             )
-
-                            // Selection Overlay
                             if (isSelectionMode) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .background(
-                                            if (isSelected) Color.Black.copy(alpha = 0.4f)
-                                            else Color.Transparent
-                                        )
-                                        .border(
-                                            width = if (isSelected) 4.dp else 0.dp,
-                                            color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
-                                        )
+                                        .background(if (isSelected) Color.Black.copy(alpha = 0.4f) else Color.Transparent)
+                                        .border(width = if (isSelected) 4.dp else 0.dp, color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
                                 )
-
-                                // Checkmark (Top Right)
                                 Box(
-                                    modifier = Modifier
-                                        .padding(8.dp)
-                                        .align(Alignment.TopEnd)
-                                        .size(24.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (isSelected) MaterialTheme.colorScheme.primary
-                                            else Color.White.copy(alpha = 0.5f)
-                                        )
-                                        .border(1.dp, Color.White, CircleShape),
+                                    modifier = Modifier.padding(8.dp).align(Alignment.TopEnd).size(24.dp).clip(CircleShape).background(
+                                        if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.5f)
+                                    ).border(1.dp, Color.White, CircleShape),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    if (isSelected) {
-                                        Icon(
-                                            Icons.Default.Check,
-                                            contentDescription = "Selected",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
+                                    if (isSelected) Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                                 }
                             }
                         }
                     }
-                    // Loading footer...
                     if (uiState.isLoading && uiState.photos.isNotEmpty()) {
-                        item {
-                            Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(modifier = Modifier.size(32.dp))
-                            }
-                        }
+                        item { Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(modifier = Modifier.size(32.dp)) } }
                     }
                 }
             }

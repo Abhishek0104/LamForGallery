@@ -23,38 +23,28 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
-import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import kotlinx.coroutines.launch
-import com.example.lamforgallery.ml.ClipTokenizer
-import com.example.lamforgallery.ml.ImageEncoder
-import com.example.lamforgallery.ml.TextEncoder
-import android.graphics.Bitmap
-import android.graphics.Color
-import com.example.lamforgallery.database.AppDatabase
-import com.example.lamforgallery.database.ImageEmbedding
 import com.example.lamforgallery.ui.EmbeddingScreen
 import com.example.lamforgallery.ui.EmbeddingViewModel
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 
 class MainActivity : ComponentActivity() {
 
     private val TAG = "MainActivity"
-
     private val factory by lazy { ViewModelFactory(application) }
 
-    // --- ViewModels (Activity-Scoped) ---
     private val agentViewModel: AgentViewModel by viewModels { factory }
     private val photosViewModel: PhotosViewModel by viewModels { factory }
     private val albumsViewModel: AlbumsViewModel by viewModels { factory }
     private val embeddingViewModel: EmbeddingViewModel by viewModels { factory }
-    // --- End ViewModels ---
 
     private val permissionToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_IMAGES
@@ -63,52 +53,34 @@ class MainActivity : ComponentActivity() {
     }
     private var isPermissionGranted by mutableStateOf(false)
     private val requestPermissionLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { isGranted: Boolean ->
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
             isPermissionGranted = isGranted
-            if (isGranted) {
-                Log.d(TAG, "Permission granted. Loading ViewModels.")
-                loadAllViewModels()
-            }
+            if (isGranted) loadAllViewModels()
         }
 
     private var currentPermissionType: PermissionType? = null
     private val permissionRequestLauncher =
-        registerForActivityResult(
-            ActivityResultContracts.StartIntentSenderForResult()
-        ) { activityResult ->
+        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { activityResult ->
             val type = currentPermissionType
-            if (type == null) {
-                Log.e(TAG, "permissionRequestLauncher result but currentPermissionType is null!")
-                return@registerForActivityResult
+            if (type != null) {
+                val wasSuccessful = activityResult.resultCode == RESULT_OK
+                agentViewModel.onPermissionResult(wasSuccessful, type)
+                currentPermissionType = null
             }
-
-            val wasSuccessful = activityResult.resultCode == RESULT_OK
-            Log.d(TAG, "Permission result for $type: ${if (wasSuccessful) "GRANTED" else "DENIED"}")
-            agentViewModel.onPermissionResult(wasSuccessful, type)
-            currentPermissionType = null
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         checkAndRequestPermission()
-
         lifecycleScope.launch {
             agentViewModel.galleryDidChange.collect {
-                Log.d(TAG, "Agent reported gallery change. Refreshing Photos and Albums.")
                 photosViewModel.loadPhotos()
                 albumsViewModel.loadAlbums()
             }
         }
-
         setContent {
             MaterialTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     if (isPermissionGranted) {
                         AppNavigationHost(
                             factory = factory,
@@ -117,17 +89,12 @@ class MainActivity : ComponentActivity() {
                             albumsViewModel = albumsViewModel,
                             embeddingViewModel = embeddingViewModel,
                             onLaunchPermissionRequest = { intentSender, type ->
-                                Log.d(TAG, "Launching permissionRequestLauncher for $type...")
                                 currentPermissionType = type
-                                permissionRequestLauncher.launch(
-                                    IntentSenderRequest.Builder(intentSender).build()
-                                )
+                                permissionRequestLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
                             }
                         )
                     } else {
-                        PermissionDeniedScreen {
-                            requestPermissionLauncher.launch(permissionToRequest)
-                        }
+                        PermissionDeniedScreen { requestPermissionLauncher.launch(permissionToRequest) }
                     }
                 }
             }
@@ -135,21 +102,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkAndRequestPermission() {
-        when {
-            ContextCompat.checkSelfPermission(
-                this,
-                permissionToRequest
-            ) == PackageManager.PERMISSION_GRANTED -> {
-                Log.d(TAG, "Permission already granted.")
-                isPermissionGranted = true
-                loadAllViewModels()
-            }
-            shouldShowRequestPermissionRationale(permissionToRequest) -> {
-                requestPermissionLauncher.launch(permissionToRequest)
-            }
-            else -> {
-                requestPermissionLauncher.launch(permissionToRequest)
-            }
+        if (ContextCompat.checkSelfPermission(this, permissionToRequest) == PackageManager.PERMISSION_GRANTED) {
+            isPermissionGranted = true
+            loadAllViewModels()
+        } else {
+            requestPermissionLauncher.launch(permissionToRequest)
         }
     }
 
@@ -158,7 +115,6 @@ class MainActivity : ComponentActivity() {
         albumsViewModel.loadAlbums()
     }
 }
-
 
 @Composable
 fun AppNavigationHost(
@@ -173,8 +129,6 @@ fun AppNavigationHost(
     var selectedTab by rememberSaveable { mutableStateOf("photos") }
 
     NavHost(navController = navController, startDestination = "main") {
-
-        // Route 1: The main 3-tab screen
         composable("main") {
             AppShell(
                 agentViewModel = agentViewModel,
@@ -183,30 +137,44 @@ fun AppNavigationHost(
                 embeddingViewModel = embeddingViewModel,
                 selectedTab = selectedTab,
                 onTabSelected = { selectedTab = it },
-                onAlbumClick = { encodedAlbumName ->
-                    navController.navigate("album_detail/$encodedAlbumName")
-                },
-                onLaunchPermissionRequest = onLaunchPermissionRequest
+                onAlbumClick = { encodedName -> navController.navigate("album_detail/$encodedName") },
+                onLaunchPermissionRequest = onLaunchPermissionRequest,
+                // --- NEW: Pass navigation to single photo ---
+                onPhotoClick = { encodedUri -> navController.navigate("view_photo/$encodedUri") }
             )
         }
-
-        // Route 2: The Album Detail screen
         composable(
             route = "album_detail/{albumName}",
             arguments = listOf(navArgument("albumName") { type = NavType.StringType })
         ) { backStackEntry ->
             val albumName = backStackEntry.arguments?.getString("albumName") ?: "Unknown"
             val albumDetailViewModel: AlbumDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+            AlbumDetailScreen(albumName = albumName, viewModel = albumDetailViewModel, onNavigateBack = { navController.popBackStack() })
+        }
 
-            AlbumDetailScreen(
-                albumName = albumName,
-                viewModel = albumDetailViewModel,
-                onNavigateBack = { navController.popBackStack() }
+        // --- NEW ROUTE: Single Photo Viewer ---
+        composable(
+            route = "view_photo/{photoUri}",
+            arguments = listOf(navArgument("photoUri") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val photoUri = backStackEntry.arguments?.getString("photoUri") ?: ""
+            SinglePhotoScreen(
+                photoUriEncoded = photoUri,
+                onNavigateBack = { navController.popBackStack() },
+                onAgentAction = { prompt ->
+                    // 1. Set the single photo as the selection
+                    val decodedUri = java.net.URLDecoder.decode(photoUri, java.nio.charset.StandardCharsets.UTF_8.name())
+                    agentViewModel.setExternalSelection(listOf(decodedUri))
+
+                    // 2. Navigate back to main, then switch tab, then send prompt
+                    navController.popBackStack("main", inclusive = false)
+                    selectedTab = "agent"
+                    agentViewModel.sendUserInput(prompt) // Auto-send the prompt
+                }
             )
         }
     }
 }
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -218,35 +186,16 @@ fun AppShell(
     selectedTab: String,
     onTabSelected: (String) -> Unit,
     onAlbumClick: (String) -> Unit,
+    onPhotoClick: (String) -> Unit, // --- NEW PARAMETER ---
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit
 ) {
     Scaffold(
         bottomBar = {
             NavigationBar {
-                NavigationBarItem(
-                    selected = selectedTab == "photos",
-                    onClick = { onTabSelected("photos") },
-                    icon = { Icon(Icons.Default.Photo, contentDescription = "Photos") },
-                    label = { Text("Photos") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == "albums",
-                    onClick = { onTabSelected("albums") },
-                    icon = { Icon(Icons.Default.PhotoAlbum, contentDescription = "Albums") },
-                    label = { Text("Albums") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == "agent",
-                    onClick = { onTabSelected("agent") },
-                    icon = { Icon(Icons.Default.ChatBubble, contentDescription = "Agent") },
-                    label = { Text("Agent") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == "indexing",
-                    onClick = { onTabSelected("indexing") },
-                    icon = { Icon(Icons.Default.ImageSearch, contentDescription = "Indexing") },
-                    label = { Text("Indexing") }
-                )
+                NavigationBarItem(selected = selectedTab == "photos", onClick = { onTabSelected("photos") }, icon = { Icon(Icons.Default.Photo, contentDescription = "Photos") }, label = { Text("Photos") })
+                NavigationBarItem(selected = selectedTab == "albums", onClick = { onTabSelected("albums") }, icon = { Icon(Icons.Default.PhotoAlbum, contentDescription = "Albums") }, label = { Text("Albums") })
+                NavigationBarItem(selected = selectedTab == "agent", onClick = { onTabSelected("agent") }, icon = { Icon(Icons.Default.ChatBubble, contentDescription = "Agent") }, label = { Text("Agent") })
+                NavigationBarItem(selected = selectedTab == "indexing", onClick = { onTabSelected("indexing") }, icon = { Icon(Icons.Default.ImageSearch, contentDescription = "Indexing") }, label = { Text("Indexing") })
             }
         }
     ) { paddingValues ->
@@ -254,22 +203,11 @@ fun AppShell(
             when (selectedTab) {
                 "photos" -> PhotosScreen(
                     viewModel = photosViewModel,
-                    // --- NEW: Handle the "Ask Agent" callback
-                    onSendToAgent = { uris ->
-                        // 1. Push the selected URIs to the agent's state
-                        agentViewModel.setExternalSelection(uris)
-                        // 2. Switch the tab to "agent"
-                        onTabSelected("agent")
-                    }
+                    onSendToAgent = { uris -> agentViewModel.setExternalSelection(uris); onTabSelected("agent") },
+                    onPhotoClick = onPhotoClick // --- PASS IT DOWN ---
                 )
-                "albums" -> AlbumsScreen(
-                    viewModel = albumsViewModel,
-                    onAlbumClick = onAlbumClick
-                )
-                "agent" -> AgentScreen(
-                    viewModel = agentViewModel,
-                    onLaunchPermissionRequest = onLaunchPermissionRequest
-                )
+                "albums" -> AlbumsScreen(viewModel = albumsViewModel, onAlbumClick = onAlbumClick)
+                "agent" -> AgentScreen(viewModel = agentViewModel, onLaunchPermissionRequest = onLaunchPermissionRequest)
                 "indexing" -> EmbeddingScreen(viewModel = embeddingViewModel)
             }
         }
