@@ -1,4 +1,4 @@
-// ... existing imports ...
+// ... (Imports same as before) ...
 package com.example.lamforgallery.tools
 
 import android.content.ContentUris
@@ -6,6 +6,7 @@ import android.content.ContentValues
 import android.content.IntentSender
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -19,49 +20,16 @@ import kotlinx.coroutines.withContext
 import java.io.OutputStream
 import android.content.ContentResolver
 import androidx.exifinterface.media.ExifInterface
+import kotlin.math.ceil
+import kotlin.math.sqrt
 
 class GalleryTools(private val resolver: ContentResolver) {
 
     private val TAG = "GalleryTools"
 
-    // --- NEW DATE FILTER FUNCTION ---
-    /**
-     * Returns a list of photo URIs taken between startTimestamp and endTimestamp.
-     * Inputs are in Milliseconds (Epoch).
-     */
-    suspend fun getPhotosInDateRange(startMillis: Long, endMillis: Long): List<String> {
-        Log.d(TAG, "Fetching photos between $startMillis and $endMillis")
-        val photoUris = mutableListOf<String>()
-        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(MediaStore.Images.Media._ID)
+    // ... (searchPhotos, getPhotosInDateRange, IntentSenders, Move, Filters, Metadata functions REMAIN THE SAME) ...
+    // ... (Skipping them here to focus on the Collage update, assume they are present) ...
 
-        val selection = "${MediaStore.Images.Media.DATE_TAKEN} >= ? AND ${MediaStore.Images.Media.DATE_TAKEN} <= ?"
-        val selectionArgs = arrayOf(startMillis.toString(), endMillis.toString())
-
-        val sortOrder = "${MediaStore.Images.Media.DATE_TAKEN} DESC"
-
-        return withContext(Dispatchers.IO) {
-            try {
-                resolver.query(collection, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
-                    val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-                    while (cursor.moveToNext()) {
-                        val id = cursor.getLong(idColumn)
-                        val contentUri = ContentUris.withAppendedId(collection, id)
-                        photoUris.add(contentUri.toString())
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error fetching photos by date", e)
-            }
-            Log.d(TAG, "Found ${photoUris.size} photos in date range.")
-            photoUris
-        }
-    }
-    // --- END NEW FUNCTION ---
-
-    // ... (Rest of the file: searchPhotos, createDeleteIntentSender, etc. remain unchanged) ...
-
-    // (I am including the rest of the file content to ensure it remains a complete runnable file)
     suspend fun searchPhotos(query: String): List<String> {
         Log.d(TAG, "AGENT REQUESTED SEARCH for: $query")
         val photoUris = mutableListOf<String>()
@@ -80,6 +48,29 @@ class GalleryTools(private val resolver: ContentResolver) {
                     photoUris.add(contentUri.toString())
                 }
             }
+            photoUris
+        }
+    }
+
+    // --- NEW DATE FILTER FUNCTION ---
+    suspend fun getPhotosInDateRange(startMillis: Long, endMillis: Long): List<String> {
+        val photoUris = mutableListOf<String>()
+        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(MediaStore.Images.Media._ID)
+        val selection = "${MediaStore.Images.Media.DATE_TAKEN} >= ? AND ${MediaStore.Images.Media.DATE_TAKEN} <= ?"
+        val selectionArgs = arrayOf(startMillis.toString(), endMillis.toString())
+        val sortOrder = "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+
+        return withContext(Dispatchers.IO) {
+            try {
+                resolver.query(collection, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getLong(idCol)
+                        photoUris.add(ContentUris.withAppendedId(collection, id).toString())
+                    }
+                }
+            } catch (e: Exception) { Log.e(TAG, "Error", e) }
             photoUris
         }
     }
@@ -106,37 +97,76 @@ class GalleryTools(private val resolver: ContentResolver) {
                     resolver.update(Uri.parse(uriString), values, null, null)
                 }
                 true
-            } catch (e: Exception) {
-                false
-            }
+            } catch (e: Exception) { false }
         }
     }
 
+    // --- UPDATED COLLAGE LOGIC (SMART GRID) ---
     suspend fun createCollage(photoUris: List<String>, title: String): String? {
-        if (photoUris.isEmpty()) throw Exception("No photos provided for collage.")
+        if (photoUris.isEmpty()) throw Exception("No photos provided.")
+
         return withContext(Dispatchers.IO) {
             try {
+                // 1. Load Bitmaps
                 val bitmaps = photoUris.mapNotNull { loadBitmapFromUri(it) }
-                if (bitmaps.isEmpty()) throw Exception("Could not load any bitmaps.")
-                val totalHeight = bitmaps.sumOf { it.height }
-                val maxWidth = bitmaps.maxOf { it.width }
-                val collageBitmap = Bitmap.createBitmap(maxWidth, totalHeight, Bitmap.Config.ARGB_8888)
+                if (bitmaps.isEmpty()) throw Exception("Could not load bitmaps.")
+
+                // 2. Calculate Grid Dimensions
+                val count = bitmaps.size
+                val cols = if (count <= 1) 1 else 2
+                val rows = ceil(count.toDouble() / cols).toInt()
+
+                val cellWidth = 1080 / cols
+                val cellHeight = 1080 / cols // Square cells look best for stories
+
+                // 3. Create Canvas
+                val finalWidth = 1080
+                val finalHeight = rows * cellHeight
+
+                val collageBitmap = Bitmap.createBitmap(finalWidth, finalHeight, Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(collageBitmap)
-                var currentY = 0f
-                for (bitmap in bitmaps) {
-                    canvas.drawBitmap(bitmap, 0f, currentY, null)
-                    currentY += bitmap.height
+                canvas.drawColor(android.graphics.Color.WHITE) // White background
+
+                // 4. Draw Images in Grid
+                for (i in bitmaps.indices) {
+                    val bitmap = bitmaps[i]
+                    val col = i % cols
+                    val row = i / cols
+
+                    val left = col * cellWidth
+                    val top = row * cellHeight
+                    val right = left + cellWidth
+                    val bottom = top + cellHeight
+
+                    val destRect = Rect(left, top, right, bottom)
+
+                    // Center-crop logic
+                    val srcRect = getCenterCropRect(bitmap.width, bitmap.height)
+
+                    canvas.drawBitmap(bitmap, srcRect, destRect, null)
                     bitmap.recycle()
                 }
-                val newUri = saveBitmapToMediaStore(collageBitmap, title, "Pictures/Collages")
+
+                // 5. Save
+                val newUri = saveBitmapToMediaStore(collageBitmap, title, "Pictures/Stories")
                 collageBitmap.recycle()
                 newUri.toString()
             } catch (e: Exception) {
+                Log.e(TAG, "Collage failed", e)
                 null
             }
         }
     }
 
+    private fun getCenterCropRect(width: Int, height: Int): Rect {
+        val size = width.coerceAtMost(height)
+        val x = (width - size) / 2
+        val y = (height - size) / 2
+        return Rect(x, y, x + size, y + size)
+    }
+    // --- END UPDATED COLLAGE ---
+
+    // ... (Rest of file: applyFilter, getPhotoMetadata, getAlbums, etc. remain unchanged) ...
     suspend fun applyFilter(photoUris: List<String>, filterName: String): List<String> {
         val filter = when (filterName.lowercase()) {
             "grayscale", "black and white", "b&w" -> FilterType.GRAYSCALE

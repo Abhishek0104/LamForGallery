@@ -274,14 +274,9 @@ fun MediaGridItem(uri: String, modifier: Modifier = Modifier) {
 }
 
 // ... (SelectionBottomSheet and ChatInputBar remain mostly the same) ...
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SelectionBottomSheet(
-    uris: List<String>,
-    onCancel: () -> Unit,
-    onConfirm: (Set<String>) -> Unit
-) {
+fun SelectionBottomSheet(uris: List<String>, onCancel: () -> Unit, onConfirm: (Set<String>) -> Unit) {
     var localSelection by remember { mutableStateOf(emptySet<String>()) }
     val selectionCount = localSelection.size
 
@@ -289,22 +284,25 @@ fun SelectionBottomSheet(
         topBar = {
             TopAppBar(
                 title = { Text("Select Photos") },
-                navigationIcon = {
-                    IconButton(onClick = onCancel) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
-                    }
-                }
+                navigationIcon = { IconButton(onClick = onCancel) { Icon(Icons.Default.Close, contentDescription = "Close") } }
             )
         },
-        bottomBar = {
-            BottomAppBar(containerColor = MaterialTheme.colorScheme.surface) {
-                Spacer(modifier = Modifier.weight(1f))
-                Button(onClick = { onConfirm(localSelection) }, enabled = selectionCount > 0) {
+        // --- MOVED BUTTON TO FLOATING ACTION BUTTON ---
+        floatingActionButton = {
+            if (selectionCount > 0) {
+                ExtendedFloatingActionButton(
+                    onClick = { onConfirm(localSelection) },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ) {
+                    Icon(Icons.Default.Check, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text("Confirm ($selectionCount)")
                 }
-                Spacer(modifier = Modifier.weight(1f))
             }
-        }
+        },
+        floatingActionButtonPosition = FabPosition.End
+        // --- REMOVED BOTTOM APP BAR ---
     ) { paddingValues ->
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 100.dp),
@@ -316,11 +314,7 @@ fun SelectionBottomSheet(
                 SelectablePhotoItem(
                     uri = uri,
                     isSelected = localSelection.contains(uri),
-                    onToggle = {
-                        localSelection = localSelection.toMutableSet().apply {
-                            if (contains(uri)) remove(uri) else add(uri)
-                        }
-                    }
+                    onToggle = { localSelection = localSelection.toMutableSet().apply { if (contains(uri)) remove(uri) else add(uri) } }
                 )
             }
         }

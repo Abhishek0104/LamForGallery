@@ -37,8 +37,8 @@ import java.util.UUID
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeFormatterBuilder // --- NEW IMPORT ---
-import java.time.temporal.ChronoField // --- NEW IMPORT ---
+import java.time.format.DateTimeFormatterBuilder
+import java.time.temporal.ChronoField
 
 // ... (State definitions remain same) ...
 data class ChatMessage(
@@ -309,7 +309,9 @@ class AgentViewModel(
                     val newCollageUri = galleryTools.createCollage(uris, title)
                     val message = "I've created the collage '$title'."
                     val imageList = if (newCollageUri != null) listOf(newCollageUri) else null
-                    addMessage(ChatMessage(text = message, sender= Sender.AGENT, imageUris = imageList))
+                    // --- FIX: Enable image display for collage ---
+                    addMessage(ChatMessage(text = message, sender= Sender.AGENT, imageUris = imageList, hasSelectionPrompt = true))
+                    // --- END FIX ---
                     viewModelScope.launch { _galleryDidChange.emit(Unit) }
                     newCollageUri
                 }
