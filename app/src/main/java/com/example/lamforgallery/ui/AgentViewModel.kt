@@ -393,7 +393,6 @@ class AgentViewModel(
                     viewModelScope.launch { _galleryDidChange.emit(Unit) }
                     newCollageUri
                 }
-
                 "apply_filter" -> {
                     val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
                     if (uris.isEmpty()) throw Exception("No photos were selected to apply a filter.")
@@ -425,6 +424,18 @@ class AgentViewModel(
                     }
                     newImageUris
                 }
+
+                // --- NEW TOOL HANDLER ---
+                "get_photo_metadata" -> {
+                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
+                    if (uris.isEmpty()) throw Exception("No photos were selected to check metadata.")
+
+                    val metadataSummary = galleryTools.getPhotoMetadata(uris)
+
+                    // We return the raw text to the Agent so it can summarize/chat about it
+                    mapOf("metadata_summary" to metadataSummary)
+                }
+                // --- END NEW HANDLER ---
 
                 else -> {
                     Log.w(TAG, "Unknown tool called: ${toolCall.name}")

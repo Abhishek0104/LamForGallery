@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.OutputStream
 import android.content.ContentResolver // Import ContentResolver
+import androidx.exifinterface.media.ExifInterface // --- NEW IMPORT ---
 
 /**
  * This class contains the *real* Kotlin implementations for all
@@ -32,6 +33,7 @@ class GalleryTools(private val resolver: ContentResolver) {
      * Searches MediaStore by filename.
      */
     suspend fun searchPhotos(query: String): List<String> {
+        // ... existing code ...
         Log.d(TAG, "AGENT REQUESTED SEARCH for: $query")
         val photoUris = mutableListOf<String>()
         val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -57,7 +59,6 @@ class GalleryTools(private val resolver: ContentResolver) {
 
     /**
      * Creates an IntentSender for a delete request.
-     * This PAUSES the agent loop and asks the user for permission.
      */
     @RequiresApi(Build.VERSION_CODES.R)
     fun createDeleteIntentSender(photoUris: List<String>): IntentSender? {
@@ -68,7 +69,6 @@ class GalleryTools(private val resolver: ContentResolver) {
 
     /**
      * Creates an IntentSender for a write (move) request.
-     * This PAUSES the agent loop and asks the user for permission.
      */
     @RequiresApi(Build.VERSION_CODES.R)
     fun createWriteIntentSender(photoUris: List<String>): IntentSender? {
@@ -86,7 +86,6 @@ class GalleryTools(private val resolver: ContentResolver) {
             try {
                 for (uriString in photoUris) {
                     val values = ContentValues().apply {
-                        // Moving files is done by changing their relative path
                         put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$albumName")
                     }
                     resolver.update(Uri.parse(uriString), values, null, null)
@@ -110,11 +109,9 @@ class GalleryTools(private val resolver: ContentResolver) {
 
         return withContext(Dispatchers.IO) {
             try {
-                // 1. Load bitmaps
                 val bitmaps = photoUris.mapNotNull { loadBitmapFromUri(it) }
                 if (bitmaps.isEmpty()) throw Exception("Could not load any bitmaps.")
 
-                // 2. Create new bitmap (simple vertical stitch)
                 val totalHeight = bitmaps.sumOf { it.height }
                 val maxWidth = bitmaps.maxOf { it.width }
                 val collageBitmap = Bitmap.createBitmap(maxWidth, totalHeight, Bitmap.Config.ARGB_8888)
@@ -124,10 +121,9 @@ class GalleryTools(private val resolver: ContentResolver) {
                 for (bitmap in bitmaps) {
                     canvas.drawBitmap(bitmap, 0f, currentY, null)
                     currentY += bitmap.height
-                    bitmap.recycle() // Clean up memory
+                    bitmap.recycle()
                 }
 
-                // 3. Save to MediaStore
                 val newUri = saveBitmapToMediaStore(collageBitmap, title, "Pictures/Collages")
                 collageBitmap.recycle()
 
@@ -165,14 +161,10 @@ class GalleryTools(private val resolver: ContentResolver) {
                     continue
                 }
 
-                // Apply the filter
                 val filteredBitmap = applyColorFilter(originalBitmap, filter)
-
-                // Get original filename to create a new one
                 val originalName = getFileName(uriString) ?: "filtered_image"
                 val newTitle = "${originalName}_${filterName}"
 
-                // Save the new bitmap
                 try {
                     val newUri = saveBitmapToMediaStore(filteredBitmap, newTitle, "Pictures/Filters")
                     newImageUris.add(newUri.toString())
@@ -180,7 +172,6 @@ class GalleryTools(private val resolver: ContentResolver) {
                     Log.e(TAG, "Failed to save filtered bitmap", e)
                 }
 
-                // Cleanup
                 originalBitmap.recycle()
                 filteredBitmap.recycle()
             }
@@ -190,7 +181,48 @@ class GalleryTools(private val resolver: ContentResolver) {
         }
     }
 
+    // --- NEW METADATA TOOL ---
+    /**
+     * Reads EXIF data from a list of URIs and returns a formatted summary string.
+     */
+    suspend fun getPhotoMetadata(photoUris: List<String>): String {
+        Log.d(TAG, "AGENT REQUESTED METADATA for: $photoUris")
+        if (photoUris.isEmpty()) return "No photos selected."
+
+        return withContext(Dispatchers.IO) {
+            val sb = StringBuilder()
+
+            photoUris.forEachIndexed { index, uriString ->
+                try {
+                    val uri = Uri.parse(uriString)
+                    resolver.openInputStream(uri)?.use { inputStream ->
+                        val exif = ExifInterface(inputStream)
+                        val date = exif.getAttribute(ExifInterface.TAG_DATETIME) ?: "Unknown Date"
+                        val make = exif.getAttribute(ExifInterface.TAG_MAKE) ?: "Unknown Make"
+                        val model = exif.getAttribute(ExifInterface.TAG_MODEL) ?: "Unknown Model"
+                        val lat = exif.getAttribute(ExifInterface.TAG_GPS_LATITUDE)
+                        val long = exif.getAttribute(ExifInterface.TAG_GPS_LONGITUDE)
+
+                        val location = if (lat != null && long != null) "$lat, $long" else "Unknown Location"
+
+                        sb.append("Photo ${index + 1}:\n")
+                        sb.append("- Date: $date\n")
+                        sb.append("- Camera: $make $model\n")
+                        sb.append("- Location: $location\n\n")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to read EXIF for $uriString", e)
+                    sb.append("Photo ${index + 1}: Could not read metadata.\n\n")
+                }
+            }
+            sb.toString()
+        }
+    }
+    // --- END NEW TOOL ---
+
     // --- GALLERY/ALBUM TAB FUNCTIONS ---
+
+    // ... existing code (Albums and Photos fetching logic remains unchanged) ...
 
     data class Album(
         val name: String,
@@ -198,10 +230,6 @@ class GalleryTools(private val resolver: ContentResolver) {
         val photoCount: Int
     )
 
-    /**
-     * Fetches all unique albums (folders) from the MediaStore.
-     * --- THIS VERSION IS FIXED ---
-     */
     suspend fun getAlbums(): List<Album> {
         Log.d(TAG, "Fetching all albums")
         val albums = mutableMapOf<String, Album>()
@@ -213,9 +241,7 @@ class GalleryTools(private val resolver: ContentResolver) {
             "COUNT(${MediaStore.Images.Media._ID}) AS photo_count"
         )
 
-        // --- FIX: Use Bundle for robust GROUP BY query ---
         val queryArgs = Bundle().apply {
-            // This is the SQL: SELECT ... FROM ... WHERE BUCKET_DISPLAY_NAME IS NOT NULL GROUP BY BUCKET_DISPLAY_NAME
             putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} IS NOT NULL")
             putStringArray(ContentResolver.QUERY_ARG_GROUP_COLUMNS, arrayOf(MediaStore.Images.Media.BUCKET_DISPLAY_NAME))
             putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} ASC")
@@ -240,7 +266,7 @@ class GalleryTools(private val resolver: ContentResolver) {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to use GROUP BY query for albums, using fallback. ${e.message}")
-                return@withContext getAlbumsFallback() // Keep fallback just in case
+                return@withContext getAlbumsFallback()
             }
             Log.d(TAG, "Found ${albums.size} albums.")
             albums.values.toList()
@@ -248,7 +274,6 @@ class GalleryTools(private val resolver: ContentResolver) {
     }
 
     private suspend fun getAlbumsFallback(): List<Album> {
-        // ... (This function remains the same as you had it) ...
         val albums = mutableMapOf<String, MutableList<String>>()
         val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
@@ -277,17 +302,12 @@ class GalleryTools(private val resolver: ContentResolver) {
         }
     }
 
-    /**
-     * Fetches all photos, with pagination.
-     * --- THIS VERSION IS FIXED ---
-     */
     suspend fun getPhotos(page: Int, pageSize: Int): List<String> {
         Log.d(TAG, "Fetching photos page: $page, size: $pageSize")
         val photoUris = mutableListOf<String>()
         val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(MediaStore.Images.Media._ID)
 
-        // --- FIX: Use Bundle for robust pagination query ---
         val queryArgs = Bundle().apply {
             putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, "${MediaStore.Images.Media.DATE_TAKEN} DESC")
             putInt(ContentResolver.QUERY_ARG_LIMIT, pageSize)
@@ -308,20 +328,14 @@ class GalleryTools(private val resolver: ContentResolver) {
         }
     }
 
-    // --- NEW FUNCTION TO ADD ---
-    /**
-     * Fetches all photos *for a specific album*, with pagination.
-     */
     suspend fun getPhotosForAlbum(albumName: String, page: Int, pageSize: Int): List<String> {
         Log.d(TAG, "Fetching photos for album: $albumName, page: $page")
         val photoUris = mutableListOf<String>()
         val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(MediaStore.Images.Media._ID)
 
-        // --- This is the main difference ---
         val selection = "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} = ?"
         val selectionArgs = arrayOf(albumName)
-        // --- End difference ---
 
         val queryArgs = Bundle().apply {
             putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
@@ -344,7 +358,6 @@ class GalleryTools(private val resolver: ContentResolver) {
             photoUris
         }
     }
-    // --- END NEW FUNCTION ---
 
     // --- PRIVATE HELPER FUNCTIONS ---
 
