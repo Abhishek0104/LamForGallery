@@ -7,7 +7,8 @@ data class AgentRequest(
     @SerializedName("sessionId") val sessionId: String?,
     @SerializedName("userInput") val userInput: String?,
     @SerializedName("toolResult") val toolResult: ToolResult? = null,
-    @SerializedName("selectedUris") val selectedUris: List<String>? = null
+    @SerializedName("selectedUris") val selectedUris: List<String>? = null,
+    @SerializedName("base64Images") val base64Images: List<String>? = null
 
 )
 

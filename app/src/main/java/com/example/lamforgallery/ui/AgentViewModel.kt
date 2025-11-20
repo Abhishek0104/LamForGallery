@@ -19,7 +19,8 @@ import com.example.lamforgallery.ml.ClipTokenizer
 import com.example.lamforgallery.ml.TextEncoder
 import com.example.lamforgallery.utils.SimilarityUtil
 import com.example.lamforgallery.database.AppDatabase
-import com.example.lamforgallery.utils.CleanupManager // --- NEW IMPORT ---
+import com.example.lamforgallery.utils.CleanupManager
+import com.example.lamforgallery.utils.ImageHelper // --- NEW IMPORT ---
 import com.google.gson.Gson
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,7 +42,7 @@ data class ChatMessage(
     val sender: Sender,
     val imageUris: List<String>? = null,
     val hasSelectionPrompt: Boolean = false,
-    val isCleanupPrompt: Boolean = false // --- NEW FLAG ---
+    val isCleanupPrompt: Boolean = false
 )
 
 enum class Sender {
@@ -64,22 +65,20 @@ data class AgentUiState(
     val selectedImageUris: Set<String> = emptySet(),
     val isSelectionSheetOpen: Boolean = false,
     val selectionSheetUris: List<String> = emptyList(),
-
-    // --- NEW CLEANUP STATE ---
     val cleanupGroups: List<CleanupManager.DuplicateGroup> = emptyList()
 )
 
 enum class PermissionType { DELETE, WRITE }
 
 class AgentViewModel(
-    application: Application,
+    private val application: Application, // Changed to property for access in sendUserInput
     private val agentApi: AgentApiService,
     private val galleryTools: GalleryTools,
     private val gson: Gson,
     private val imageEmbeddingDao: ImageEmbeddingDao,
     private val clipTokenizer: ClipTokenizer,
     private val textEncoder: TextEncoder,
-    private val cleanupManager: CleanupManager // --- NEW INJECTION ---
+    private val cleanupManager: CleanupManager
 ) : ViewModel() {
 
     private val TAG = "AgentViewModel"
@@ -124,22 +123,47 @@ class AgentViewModel(
         val currentState = _uiState.value
         if (currentState.currentStatus !is AgentStatus.Idle) return
 
+        // Capture current selection
         val selectedUris = currentState.selectedImageUris.toList()
+        // Clear selection from UI immediately for cleanliness
         _uiState.update { it.copy(selectedImageUris = emptySet()) }
 
         viewModelScope.launch {
             addMessage(ChatMessage(text = input, sender = Sender.USER))
             setStatus(AgentStatus.Loading("Thinking..."))
 
+            // --- NEW: CHECK FOR IMAGES TO SEND ---
+            var base64Images: List<String>? = null
+
+            if (selectedUris.isNotEmpty()) {
+                // If user selected images, we compress and send them!
+                // This allows "Analyze this" or "Compare these" commands.
+                setStatus(AgentStatus.Loading("Reading images..."))
+                try {
+                    val images = ImageHelper.encodeImages(application, selectedUris)
+                    if (images.isNotEmpty()) {
+                        base64Images = images
+                        Log.d(TAG, "Encoded ${images.size} images for agent analysis.")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to encode images", e)
+                    // We continue anyway, just without the visual payload
+                }
+                setStatus(AgentStatus.Loading("Thinking..."))
+            }
+
             val request = AgentRequest(
                 sessionId = currentSessionId,
                 userInput = input,
                 toolResult = null,
-                selectedUris = selectedUris.ifEmpty { null }
+                selectedUris = selectedUris.ifEmpty { null },
+                base64Images = base64Images // --- PASSING THE IMAGES ---
             )
             handleAgentRequest(request)
         }
     }
+
+    // ... (Rest of the class: onPermissionResult, handleAgentRequest, executeLocalTool remain unchanged) ...
 
     fun onPermissionResult(wasSuccessful: Boolean, type: PermissionType) {
         val toolCallId = pendingToolCallId
@@ -240,11 +264,9 @@ class AgentViewModel(
                     }
                     mapOf("photos_found" to foundUris.size)
                 }
-                // --- NEW TOOL HANDLER ---
                 "scan_for_cleanup" -> {
                     setStatus(AgentStatus.Loading("Scanning gallery for duplicates..."))
                     val duplicates = cleanupManager.findDuplicates()
-
                     if (duplicates.isEmpty()) {
                         addMessage(ChatMessage(text = "I scanned the gallery but didn't find any duplicates.", sender = Sender.AGENT))
                         mapOf("result" to "No duplicates found")
@@ -254,12 +276,11 @@ class AgentViewModel(
                         addMessage(ChatMessage(
                             text = "I found ${duplicates.size} sets of duplicates (approx $count photos). Tap to review.",
                             sender = Sender.AGENT,
-                            isCleanupPrompt = true // Signals UI to show "Review" button
+                            isCleanupPrompt = true
                         ))
                         mapOf("found_sets" to duplicates.size, "total_duplicates" to count)
                     }
                 }
-                // --- END NEW TOOL ---
                 "delete_photos" -> {
                     val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
                     val intentSender = galleryTools.createDeleteIntentSender(uris)
@@ -270,7 +291,6 @@ class AgentViewModel(
                         null
                     } else mapOf("error" to "Failed to create delete request")
                 }
-                // ... (Other tools remain identical) ...
                 "move_photos_to_album" -> {
                     val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
                     val intentSender = galleryTools.createWriteIntentSender(uris)
