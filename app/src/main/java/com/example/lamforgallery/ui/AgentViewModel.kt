@@ -34,26 +34,18 @@ import java.util.UUID
 
 // --- STATE DEFINITIONS ---
 
-/**
- * Represents one message in the chat.
- * Includes optional image URIs for display.
- */
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val text: String,
     val sender: Sender,
     val imageUris: List<String>? = null,
-    val hasSelectionPrompt: Boolean = false // <-- Marks a message as "Tap to select"
+    val hasSelectionPrompt: Boolean = false
 )
 
 enum class Sender {
     USER, AGENT, ERROR
 }
 
-/**
- * Represents the current *status* of the agent
- * (Loading, Waiting for Permission, or Idle)
- */
 sealed class AgentStatus {
     data class Loading(val message: String) : AgentStatus()
     data class RequiresPermission(
@@ -64,9 +56,6 @@ sealed class AgentStatus {
     object Idle : AgentStatus()
 }
 
-/**
- * The single, combined UI state, including the user's selection.
- */
 data class AgentUiState(
     val messages: List<ChatMessage> = emptyList(),
     val currentStatus: AgentStatus = AgentStatus.Idle,
@@ -75,7 +64,6 @@ data class AgentUiState(
     // --- STATE FOR THE BOTTOM SHEET ---
     val isSelectionSheetOpen: Boolean = false,
     val selectionSheetUris: List<String> = emptyList()
-    // --- END STATE ---
 )
 
 enum class PermissionType { DELETE, WRITE }
@@ -96,7 +84,6 @@ class AgentViewModel(
     private val TAG = "AgentViewModel"
     private var currentSessionId: String = UUID.randomUUID().toString()
 
-    // Used to pause the loop for permission
     private var pendingToolCallId: String? = null
     private var pendingToolArgs: Map<String, Any>? = null
 
@@ -123,13 +110,17 @@ class AgentViewModel(
         }
     }
 
-
+    // --- NEW: ALLOW EXTERNAL SELECTION (Gallery to Agent) ---
+    fun setExternalSelection(uris: List<String>) {
+        _uiState.update {
+            it.copy(selectedImageUris = uris.toSet())
+        }
+        // Optional: Add a system message or prompt to guide the user?
+        // For now, we rely on the UI showing "X images selected"
+    }
+    // --- END NEW ---
 
     // --- FUNCTIONS FOR BOTTOM SHEET ---
-
-    /**
-     * Called by the UI (the chat bubble) to open the sheet.
-     */
     fun openSelectionSheet(uris: List<String>) {
         _uiState.update {
             it.copy(
@@ -139,37 +130,27 @@ class AgentViewModel(
         }
     }
 
-    /**
-     * Called by the UI (the sheet's "Confirm" button).
-     */
     fun confirmSelection(newSelection: Set<String>) {
         _uiState.update {
             it.copy(
                 isSelectionSheetOpen = false,
                 selectedImageUris = newSelection,
-                selectionSheetUris = emptyList() // Clear sheet data
+                selectionSheetUris = emptyList()
             )
         }
     }
 
-    /**
-     * Called by the UI (when the sheet is dismissed).
-     */
     fun closeSelectionSheet() {
         _uiState.update {
             it.copy(
                 isSelectionSheetOpen = false,
-                selectionSheetUris = emptyList() // Clear sheet data
+                selectionSheetUris = emptyList()
             )
         }
     }
-
     // --- END BOTTOM SHEET FUNCTIONS ---
 
 
-    /**
-     * Called by the UI when the user hits "Send".
-     */
     fun sendUserInput(input: String) {
         val currentState = _uiState.value
         if (currentState.currentStatus !is AgentStatus.Idle) {
@@ -196,9 +177,6 @@ class AgentViewModel(
         }
     }
 
-    /**
-     * Called by the Activity when a permission dialog (delete/move) returns.
-     */
     fun onPermissionResult(wasSuccessful: Boolean, type: PermissionType) {
         val toolCallId = pendingToolCallId
         val args = pendingToolArgs
@@ -207,8 +185,6 @@ class AgentViewModel(
             Log.e(TAG, "onPermissionResult called but no pending tool call!")
             return
         }
-
-
 
         viewModelScope.launch {
             pendingToolCallId = null
@@ -222,7 +198,6 @@ class AgentViewModel(
 
             when (type) {
                 PermissionType.DELETE -> {
-                    // --- START FIX ---
                     if (args == null) {
                         Log.e(TAG, "Delete permission granted but no pending args!")
                         addMessage(ChatMessage(text = "Error: Missing context for delete operation.", sender = Sender.ERROR))
@@ -241,20 +216,15 @@ class AgentViewModel(
                             Log.d(TAG, "Deleted ${urisToDelete.size} embeddings from database.")
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to delete embeddings from DB", e)
-                            // Don't block the agent, just log the error
                         }
                     }
-                    // 2. Clean up local UI state (prevents black box on re-search)
+
                     _uiState.update { currentState ->
                         currentState.copy(
                             selectedImageUris = currentState.selectedImageUris - urisToDelete.toSet(),
                             selectionSheetUris = currentState.selectionSheetUris - urisToDelete.toSet()
                         )
                     }
-
-                    // 3. Signal to other ViewModels (like EmbeddingViewModel) to refresh their count
-                    _galleryDidChange.emit(Unit)
-                    // --- END FIX/UPDATE ---
 
                     sendToolResult(gson.toJson(true), toolCallId)
                     _galleryDidChange.emit(Unit)
@@ -329,53 +299,29 @@ class AgentViewModel(
                     val query = toolCall.args["query"] as? String ?: ""
                     Log.d(TAG, "Performing SEMANTIC search for: $query")
 
-                    // Run search logic on a background thread
                     val foundUris = withContext(Dispatchers.IO) {
-                        // 1. Tokenize the text query
                         val tokens = clipTokenizer.tokenize(query)
-
-                        // 2. Encode the tokens into a text embedding
                         val textEmbedding = textEncoder.encode(tokens)
-
-                        // 3. Get all image embeddings from the database
-                        // !!! ASSUMPTION: You have a DAO function `getAll()`
-                        // !!! ASSUMPTION: Your entity is `ImageEmbedding`
                         val allImageEmbeddings = imageEmbeddingDao.getAllEmbeddings()
-                        Log.d(TAG, "Comparing query against ${allImageEmbeddings.size} images")
 
                         val similarityResults = mutableListOf<SearchResult>()
 
-                        // 4. Calculate similarity for each image
                         for (imageEmbedding in allImageEmbeddings) {
-                            // !!! ASSUMPTION: The vector is on `.embedding` property
                             val similarity = SimilarityUtil.cosineSimilarity(
                                 textEmbedding,
                                 imageEmbedding.embedding
                             )
 
-                            // --- ADDED LOGGING ---
-                            // Get last 20 chars of URI for a cleaner log
-                            val shortUri = imageEmbedding.uri.takeLast(20)
-                            Log.d(TAG, "Similarity for ...$shortUri: $similarity")
-                            // --- END ADDED LOGGING ---
-
-                            // 5. Filter by a similarity threshold
-                            if (similarity > 0.2f) { // <-- You can tune this threshold
-                                // !!! ASSUMPTION: The URI is on `.uri` property
+                            if (similarity > 0.2f) {
                                 similarityResults.add(
                                     SearchResult(imageEmbedding.uri, similarity)
                                 )
                             }
                         }
-
-                        // 6. Sort by similarity (highest first)
                         similarityResults.sortByDescending { it.similarity }
-
-                        // 7. Return just the list of URIs
                         similarityResults.map { it.uri }
                     }
 
-                    // --- The rest of this is your *existing* UI logic ---
                     val message: String
                     if (foundUris.isEmpty()) {
                         message = "I couldn't find any photos matching '$query'."
@@ -391,7 +337,7 @@ class AgentViewModel(
                         addMessage(ChatMessage(
                             text = message,
                             sender = Sender.AGENT,
-                            imageUris = foundUris, // Store URIs in the message
+                            imageUris = foundUris,
                             hasSelectionPrompt = true
                         ))
                     }
@@ -441,7 +387,6 @@ class AgentViewModel(
                     val title = toolCall.args["title"] as? String ?: "My Collage"
                     val newCollageUri = galleryTools.createCollage(uris, title)
 
-                    // Collage is simple, we can still show the result in-line
                     val message = "I've created the collage '$title' for you."
                     val imageList = if (newCollageUri != null) listOf(newCollageUri) else null
                     addMessage(ChatMessage(text = message, sender= Sender.AGENT, imageUris = imageList))
@@ -449,7 +394,6 @@ class AgentViewModel(
                     newCollageUri
                 }
 
-                // --- *** THIS IS THE FIX *** ---
                 "apply_filter" -> {
                     val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
                     if (uris.isEmpty()) throw Exception("No photos were selected to apply a filter.")
@@ -462,19 +406,17 @@ class AgentViewModel(
                         message = "I wasn't able to apply the filter to the selected photos."
                         addMessage(ChatMessage(text = message, sender = Sender.ERROR))
                     } else {
-                        // 1. Set state to open the sheet
                         _uiState.update {
                             it.copy(
                                 isSelectionSheetOpen = true,
                                 selectionSheetUris = newImageUris
                             )
                         }
-                        // 2. Add a *prompt* to the chat
                         message = "I've applied the '$filterName' filter to ${newImageUris.size} photo(s). [Tap to view]"
                         addMessage(ChatMessage(
                             text = message,
                             sender = Sender.AGENT,
-                            imageUris = newImageUris, // Store URIs in the message
+                            imageUris = newImageUris,
                             hasSelectionPrompt = true
                         ))
                     }
@@ -483,7 +425,6 @@ class AgentViewModel(
                     }
                     newImageUris
                 }
-                // --- *** END OF FIX *** ---
 
                 else -> {
                     Log.w(TAG, "Unknown tool called: ${toolCall.name}")
@@ -538,60 +479,5 @@ class AgentViewModel(
 
     private fun setStatus(newStatus: AgentStatus) {
         _uiState.update { it.copy(currentStatus = newStatus) }
-    }
-}
-
-
-/**
- * ViewModel Factory
- */
-class AgentViewModelFactory(
-    private val application: Application
-) : ViewModelProvider.Factory {
-
-    private val gson: Gson by lazy {
-        NetworkModule.gson
-    }
-
-    private val galleryTools: GalleryTools by lazy {
-        GalleryTools(application.contentResolver)
-    }
-
-    private val agentApi: AgentApiService by lazy {
-        NetworkModule.apiService
-    }
-
-    // --- ADDED DEPENDENCIES ---
-    private val appDatabase: AppDatabase by lazy {
-        AppDatabase.getDatabase(application)
-    }
-
-    private val imageEmbeddingDao: ImageEmbeddingDao by lazy {
-        appDatabase.imageEmbeddingDao()
-    }
-
-    private val clipTokenizer: ClipTokenizer by lazy {
-        ClipTokenizer(application)
-    }
-
-    private val textEncoder: TextEncoder by lazy {
-        TextEncoder(application)
-    }
-    // --- END ADDED DEPENDENCIES ---
-
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(AgentViewModel::class.java)) {
-            return AgentViewModel(
-                application,
-                agentApi,
-                galleryTools,
-                gson,
-                imageEmbeddingDao,
-                clipTokenizer,
-                textEncoder
-            ) as T
-        }
-        throw IllegalArgumentException("Unknown ViewModel class")
     }
 }

@@ -1,44 +1,48 @@
 package com.example.lamforgallery.ui
 
 import android.util.Log
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import com.example.lamforgallery.tools.GalleryTools
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
+import com.example.lamforgallery.tools.GalleryTools
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 // --- Constants ---
-private const val PAGE_SIZE = 60 // Load 60 photos at a time
+private const val PAGE_SIZE = 60
 
 // --- State ---
 data class PhotosScreenState(
     val photos: List<String> = emptyList(),
     val isLoading: Boolean = false,
-    val canLoadMore: Boolean = true, // Becomes false when we've loaded all photos
+    val canLoadMore: Boolean = true,
     val page: Int = 0
 )
 
@@ -52,38 +56,20 @@ class PhotosViewModel(
 
     private val TAG = "PhotosViewModel"
 
-    init {
-        // We will load photos from MainActivity *after*
-        // permission is confirmed.
-        // loadPhotos() // <-- DELETE OR COMMENT OUT THIS LINE
-    }
-
-    /**
-     * Resets and loads the first page of photos.
-     */
     fun loadPhotos() {
-        // Reset state for a fresh load
         _uiState.value = PhotosScreenState()
         loadNextPage()
     }
 
-    /**
-     * Loads the next page of photos.
-     */
     fun loadNextPage() {
         val currentState = _uiState.value
-        // Prevent multiple loads at once, or loading if we're at the end
         if (currentState.isLoading || !currentState.canLoadMore) {
             return
         }
 
-        Log.d(TAG, "Loading next page, current page: ${currentState.page}")
-
         viewModelScope.launch {
-            // 1. Set loading state
             _uiState.update { it.copy(isLoading = true) }
 
-            // 2. Fetch photos for the current page
             val newPhotos = try {
                 galleryTools.getPhotos(page = currentState.page, pageSize = PAGE_SIZE)
             } catch (e: Exception) {
@@ -91,52 +77,84 @@ class PhotosViewModel(
                 emptyList<String>()
             }
 
-            // 3. Update state with new photos
             _uiState.update {
                 it.copy(
                     isLoading = false,
-                    photos = (it.photos + newPhotos).distinct(),  // Append new photos
+                    photos = (it.photos + newPhotos).distinct(),
                     page = it.page + 1,
-                    canLoadMore = newPhotos.isNotEmpty() // If we got no photos, we're at the end
+                    canLoadMore = newPhotos.isNotEmpty()
                 )
             }
-            Log.d(TAG, "Page ${currentState.page} loaded, new total: ${uiState.value.photos.size}")
         }
     }
 }
 
 // --- Composable UI ---
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun PhotosScreen(viewModel: PhotosViewModel) {
+fun PhotosScreen(
+    viewModel: PhotosViewModel,
+    onSendToAgent: (List<String>) -> Unit // <-- Callback to bridge to Agent
+) {
     val uiState by viewModel.uiState.collectAsState()
     val gridState = rememberLazyGridState()
 
-    // --- This is the "Infinite Scroll" logic ---
-    // It's a side effect that triggers when the scroll state changes.
+    // --- Local Selection State ---
+    // We manage selection locally within this screen.
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedPhotos by remember { mutableStateOf(setOf<String>()) }
+
+    // Reset selection if mode is turned off
+    LaunchedEffect(isSelectionMode) {
+        if (!isSelectionMode) {
+            selectedPhotos = emptySet()
+        }
+    }
+
     LaunchedEffect(gridState) {
-        // snapshotFlow converts the LazyGridState's layoutInfo into a Flow
         snapshotFlow { gridState.layoutInfo }
-            .distinctUntilChanged() // Only react when the layout *actually* changes
+            .distinctUntilChanged()
             .collect { layoutInfo ->
                 val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull() ?: return@collect
                 val totalItems = layoutInfo.totalItemsCount
-
-                // If the last visible item is close to the end of the list,
-                // and we're not already loading, and there's more to load...
-                if (lastVisibleItem.index >= totalItems - (PAGE_SIZE / 2) && // Load when we're halfway through the last page
-                    !uiState.isLoading &&
-                    uiState.canLoadMore
+                if (lastVisibleItem.index >= totalItems - (PAGE_SIZE / 2) &&
+                    !uiState.isLoading && uiState.canLoadMore
                 ) {
-                    // ...then load the next page.
                     viewModel.loadNextPage()
                 }
             }
     }
-    // --- End Infinite Scroll Logic ---
 
     Scaffold(
+        floatingActionButton = {
+            if (isSelectionMode && selectedPhotos.isNotEmpty()) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        // 1. Send data to callback
+                        onSendToAgent(selectedPhotos.toList())
+                        // 2. Turn off selection mode
+                        isSelectionMode = false
+                    },
+                    icon = { Icon(Icons.Default.AutoAwesome, contentDescription = "Agent") },
+                    text = { Text("Ask Agent (${selectedPhotos.size})") },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            }
+        },
         topBar = {
-            // (You can add a TopAppBar here if you want)
+            if (isSelectionMode) {
+                TopAppBar(
+                    title = { Text("${selectedPhotos.size} selected") },
+                    navigationIcon = {
+                        IconButton(onClick = { isSelectionMode = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close Selection")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                )
+            }
         }
     ) { paddingValues ->
         Box(
@@ -146,38 +164,98 @@ fun PhotosScreen(viewModel: PhotosViewModel) {
             contentAlignment = Alignment.Center
         ) {
             if (uiState.photos.isEmpty() && uiState.isLoading) {
-                // Show a loading spinner only on the *initial* load
                 CircularProgressIndicator()
             } else if (uiState.photos.isEmpty() && !uiState.isLoading) {
                 Text("No photos found.")
             } else {
                 LazyVerticalGrid(
-                    state = gridState, // Attach the grid state
+                    state = gridState,
                     columns = GridCells.Adaptive(minSize = 120.dp),
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     items(uiState.photos, key = { it }) { photoUri ->
-                        AsyncImage(
-                            model = photoUri,
-                            contentDescription = "Gallery Photo",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .aspectRatio(1f)
-                                .fillMaxWidth()
-                        )
-                    }
+                        val isSelected = selectedPhotos.contains(photoUri)
 
+                        Box(modifier = Modifier
+                            .aspectRatio(1f)
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = {
+                                    if (isSelectionMode) {
+                                        // Toggle selection
+                                        selectedPhotos = if (isSelected) {
+                                            selectedPhotos - photoUri
+                                        } else {
+                                            selectedPhotos + photoUri
+                                        }
+                                        // Auto-exit mode if empty? (Optional)
+                                        if (selectedPhotos.isEmpty()) isSelectionMode = false
+                                    } else {
+                                        // Standard click (maybe open fullscreen in future)
+                                    }
+                                },
+                                onLongClick = {
+                                    if (!isSelectionMode) {
+                                        isSelectionMode = true
+                                        selectedPhotos = selectedPhotos + photoUri
+                                    }
+                                }
+                            )
+                        ) {
+                            AsyncImage(
+                                model = photoUri,
+                                contentDescription = "Gallery Photo",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+
+                            // Selection Overlay
+                            if (isSelectionMode) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            if (isSelected) Color.Black.copy(alpha = 0.4f)
+                                            else Color.Transparent
+                                        )
+                                        .border(
+                                            width = if (isSelected) 4.dp else 0.dp,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+                                        )
+                                )
+
+                                // Checkmark (Top Right)
+                                Box(
+                                    modifier = Modifier
+                                        .padding(8.dp)
+                                        .align(Alignment.TopEnd)
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (isSelected) MaterialTheme.colorScheme.primary
+                                            else Color.White.copy(alpha = 0.5f)
+                                        )
+                                        .border(1.dp, Color.White, CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isSelected) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = "Selected",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Loading footer...
                     if (uiState.isLoading && uiState.photos.isNotEmpty()) {
-                        // Show a small spinner at the *bottom* when loading more pages
                         item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
+                            Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(modifier = Modifier.size(32.dp))
                             }
                         }
