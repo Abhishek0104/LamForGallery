@@ -1,4 +1,3 @@
-// ... (Imports same as before) ...
 package com.example.lamforgallery.tools
 
 import android.content.ContentUris
@@ -6,6 +5,7 @@ import android.content.ContentValues
 import android.content.IntentSender
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.ImageDecoder // --- NEW IMPORT ---
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
@@ -27,11 +27,10 @@ class GalleryTools(private val resolver: ContentResolver) {
 
     private val TAG = "GalleryTools"
 
-    // ... (searchPhotos, getPhotosInDateRange, IntentSenders, Move, Filters, Metadata functions REMAIN THE SAME) ...
-    // ... (Skipping them here to focus on the Collage update, assume they are present) ...
+    // ... (searchPhotos, getPhotosInDateRange, IntentSenders, Move functions REMAIN THE SAME) ...
 
+    // (Including searchPhotos for context)
     suspend fun searchPhotos(query: String): List<String> {
-        Log.d(TAG, "AGENT REQUESTED SEARCH for: $query")
         val photoUris = mutableListOf<String>()
         val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(MediaStore.Images.Media._ID)
@@ -44,15 +43,13 @@ class GalleryTools(private val resolver: ContentResolver) {
                 val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idColumn)
-                    val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                    photoUris.add(contentUri.toString())
+                    photoUris.add(ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id).toString())
                 }
             }
             photoUris
         }
     }
 
-    // --- NEW DATE FILTER FUNCTION ---
     suspend fun getPhotosInDateRange(startMillis: Long, endMillis: Long): List<String> {
         val photoUris = mutableListOf<String>()
         val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -91,9 +88,7 @@ class GalleryTools(private val resolver: ContentResolver) {
         return withContext(Dispatchers.IO) {
             try {
                 for (uriString in photoUris) {
-                    val values = ContentValues().apply {
-                        put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$albumName")
-                    }
+                    val values = ContentValues().apply { put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$albumName") }
                     resolver.update(Uri.parse(uriString), values, null, null)
                 }
                 true
@@ -101,53 +96,98 @@ class GalleryTools(private val resolver: ContentResolver) {
         }
     }
 
-    // --- UPDATED COLLAGE LOGIC (SMART GRID) ---
+    // --- UPDATED BITMAP LOADING FOR FILTERS & COLLAGE ---
+    private fun loadBitmapFromUri(uriString: String): Bitmap? {
+        return try {
+            val uri = Uri.parse(uriString)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                // Use modern ImageDecoder (Hardware accelerated, handles rotation automatically)
+                val source = ImageDecoder.createSource(resolver, uri)
+                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                    decoder.isMutableRequired = true // We need mutable to edit
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE // Software is safer for canvas ops
+                }
+            } else {
+                // Fallback for older versions
+                @Suppress("DEPRECATION")
+                MediaStore.Images.Media.getBitmap(resolver, uri)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load bitmap: $uriString", e)
+            null
+        }
+    }
+
+    suspend fun applyFilter(photoUris: List<String>, filterName: String): List<String> {
+        Log.d(TAG, "Applying filter '$filterName' to ${photoUris.size} photos")
+        val filter = when (filterName.lowercase()) {
+            "grayscale", "black and white", "b&w" -> FilterType.GRAYSCALE
+            "sepia" -> FilterType.SEPIA
+            else -> throw Exception("Unknown filter: $filterName.")
+        }
+        return withContext(Dispatchers.IO) {
+            val newImageUris = mutableListOf<String>()
+            for (uriString in photoUris) {
+                val originalBitmap = loadBitmapFromUri(uriString)
+                if (originalBitmap == null) {
+                    Log.e(TAG, "Could not load bitmap for $uriString")
+                    continue
+                }
+
+                try {
+                    val filteredBitmap = applyColorFilter(originalBitmap, filter)
+                    val originalName = getFileName(uriString) ?: "filtered_image"
+                    val newTitle = "${originalName}_${filterName}_${System.currentTimeMillis()}"
+
+                    // Save to "Pictures/Filters"
+                    val newUri = saveBitmapToMediaStore(filteredBitmap, newTitle, "Pictures/Filters")
+                    newImageUris.add(newUri.toString())
+                    Log.d(TAG, "Saved filtered image: $newUri")
+
+                    // Clean up
+                    originalBitmap.recycle()
+                    filteredBitmap.recycle()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to process/save filtered bitmap", e)
+                }
+            }
+            newImageUris
+        }
+    }
+
+    // ... (createCollage, getPhotoMetadata, getAlbums, getPhotos, getPhotosForAlbum REMAIN THE SAME) ...
+    // (Assume the rest of the file is here as provided previously)
+
     suspend fun createCollage(photoUris: List<String>, title: String): String? {
         if (photoUris.isEmpty()) throw Exception("No photos provided.")
-
         return withContext(Dispatchers.IO) {
             try {
-                // 1. Load Bitmaps
                 val bitmaps = photoUris.mapNotNull { loadBitmapFromUri(it) }
                 if (bitmaps.isEmpty()) throw Exception("Could not load bitmaps.")
-
-                // 2. Calculate Grid Dimensions
                 val count = bitmaps.size
                 val cols = if (count <= 1) 1 else 2
                 val rows = ceil(count.toDouble() / cols).toInt()
-
                 val cellWidth = 1080 / cols
-                val cellHeight = 1080 / cols // Square cells look best for stories
-
-                // 3. Create Canvas
+                val cellHeight = 1080 / cols
                 val finalWidth = 1080
                 val finalHeight = rows * cellHeight
-
                 val collageBitmap = Bitmap.createBitmap(finalWidth, finalHeight, Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(collageBitmap)
-                canvas.drawColor(android.graphics.Color.WHITE) // White background
+                canvas.drawColor(android.graphics.Color.WHITE)
 
-                // 4. Draw Images in Grid
                 for (i in bitmaps.indices) {
                     val bitmap = bitmaps[i]
                     val col = i % cols
                     val row = i / cols
-
                     val left = col * cellWidth
                     val top = row * cellHeight
                     val right = left + cellWidth
                     val bottom = top + cellHeight
-
                     val destRect = Rect(left, top, right, bottom)
-
-                    // Center-crop logic
                     val srcRect = getCenterCropRect(bitmap.width, bitmap.height)
-
                     canvas.drawBitmap(bitmap, srcRect, destRect, null)
                     bitmap.recycle()
                 }
-
-                // 5. Save
                 val newUri = saveBitmapToMediaStore(collageBitmap, title, "Pictures/Stories")
                 collageBitmap.recycle()
                 newUri.toString()
@@ -163,32 +203,6 @@ class GalleryTools(private val resolver: ContentResolver) {
         val x = (width - size) / 2
         val y = (height - size) / 2
         return Rect(x, y, x + size, y + size)
-    }
-    // --- END UPDATED COLLAGE ---
-
-    // ... (Rest of file: applyFilter, getPhotoMetadata, getAlbums, etc. remain unchanged) ...
-    suspend fun applyFilter(photoUris: List<String>, filterName: String): List<String> {
-        val filter = when (filterName.lowercase()) {
-            "grayscale", "black and white", "b&w" -> FilterType.GRAYSCALE
-            "sepia" -> FilterType.SEPIA
-            else -> throw Exception("Unknown filter: $filterName.")
-        }
-        return withContext(Dispatchers.IO) {
-            val newImageUris = mutableListOf<String>()
-            for (uriString in photoUris) {
-                val originalBitmap = loadBitmapFromUri(uriString) ?: continue
-                val filteredBitmap = applyColorFilter(originalBitmap, filter)
-                val originalName = getFileName(uriString) ?: "filtered_image"
-                val newTitle = "${originalName}_${filterName}"
-                try {
-                    val newUri = saveBitmapToMediaStore(filteredBitmap, newTitle, "Pictures/Filters")
-                    newImageUris.add(newUri.toString())
-                } catch (e: Exception) { }
-                originalBitmap.recycle()
-                filteredBitmap.recycle()
-            }
-            newImageUris
-        }
     }
 
     suspend fun getPhotoMetadata(photoUris: List<String>): String {
@@ -328,17 +342,6 @@ class GalleryTools(private val resolver: ContentResolver) {
             val uri = Uri.parse(uriString)
             resolver.query(uri, arrayOf(MediaStore.Images.Media.DISPLAY_NAME), null, null, null)?.use {
                 if (it.moveToFirst()) it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)).substringBeforeLast(".") else null
-            }
-        } catch (e: Exception) { null }
-    }
-
-    private fun loadBitmapFromUri(uriString: String): Bitmap? {
-        return try {
-            val uri = Uri.parse(uriString)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                resolver.loadThumbnail(uri, Size(1080, 1080), null)
-            } else {
-                MediaStore.Images.Media.getBitmap(resolver, uri)
             }
         } catch (e: Exception) { null }
     }

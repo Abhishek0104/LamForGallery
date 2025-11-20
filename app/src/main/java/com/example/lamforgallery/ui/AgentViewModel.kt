@@ -12,6 +12,7 @@ import com.example.lamforgallery.data.AgentRequest
 import com.example.lamforgallery.data.AgentResponse
 import com.example.lamforgallery.data.ToolCall
 import com.example.lamforgallery.data.ToolResult
+import com.example.lamforgallery.data.Suggestion
 import com.example.lamforgallery.network.AgentApiService
 import com.example.lamforgallery.network.NetworkModule
 import com.example.lamforgallery.tools.GalleryTools
@@ -47,7 +48,8 @@ data class ChatMessage(
     val sender: Sender,
     val imageUris: List<String>? = null,
     val hasSelectionPrompt: Boolean = false,
-    val isCleanupPrompt: Boolean = false
+    val isCleanupPrompt: Boolean = false,
+    val suggestions: List<Suggestion>? = null
 )
 
 enum class Sender {
@@ -178,7 +180,11 @@ class AgentViewModel(
             when (response.status) {
                 "complete" -> {
                     val message = response.agentMessage ?: "Done."
-                    addMessage(ChatMessage(text = message, sender= Sender.AGENT))
+                    addMessage(ChatMessage(
+                        text = message,
+                        sender = Sender.AGENT,
+                        suggestions = response.suggestedActions // <-- HERE
+                    ))
                     setStatus(AgentStatus.Idle)
                 }
                 "requires_action" -> {

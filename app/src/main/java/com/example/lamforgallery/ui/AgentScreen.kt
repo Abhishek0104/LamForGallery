@@ -8,6 +8,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,7 +39,6 @@ import kotlinx.coroutines.launch
  * Updated Chat UI with "WhatsApp-style" inline media grids.
  */
 
-// ... (AgentScreen function signature remains same) ...
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentScreen(
@@ -45,12 +46,12 @@ fun AgentScreen(
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit,
     onNavigateToCleanup: () -> Unit = {}
 ) {
-    // ... (Logic remains same) ...
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState()
 
+    // ... (Bottom Sheet Logic) ...
     if (uiState.isSelectionSheetOpen) {
         ModalBottomSheet(
             onDismissRequest = { viewModel.closeSelectionSheet() },
@@ -58,20 +59,13 @@ fun AgentScreen(
         ) {
             SelectionBottomSheet(
                 uris = uiState.selectionSheetUris,
-                onCancel = {
-                    coroutineScope.launch { sheetState.hide() }.invokeOnCompletion {
-                        viewModel.closeSelectionSheet()
-                    }
-                },
-                onConfirm = { selection ->
-                    coroutineScope.launch { sheetState.hide() }.invokeOnCompletion {
-                        viewModel.confirmSelection(selection)
-                    }
-                }
+                onCancel = { coroutineScope.launch { sheetState.hide() }.invokeOnCompletion { viewModel.closeSelectionSheet() } },
+                onConfirm = { selection -> coroutineScope.launch { sheetState.hide() }.invokeOnCompletion { viewModel.confirmSelection(selection) } }
             )
         }
     }
 
+    // ... (Permission Logic) ...
     LaunchedEffect(uiState.currentStatus) {
         val status = uiState.currentStatus
         if (status is AgentStatus.RequiresPermission) {
@@ -79,6 +73,7 @@ fun AgentScreen(
         }
     }
 
+    // ... (Scroll Logic) ...
     LaunchedEffect(uiState.messages.size) {
         if (uiState.messages.isNotEmpty()) {
             coroutineScope.launch {
@@ -109,7 +104,8 @@ fun AgentScreen(
                 ChatMessageItem(
                     message = message,
                     onOpenSelectionSheet = { uris -> viewModel.openSelectionSheet(uris) },
-                    onReviewCleanup = onNavigateToCleanup
+                    onReviewCleanup = onNavigateToCleanup,
+                    onSuggestionClick = { prompt -> viewModel.sendUserInput(prompt) } // --- CONNECTED HERE ---
                 )
                 Spacer(modifier = Modifier.height(12.dp))
             }
@@ -122,20 +118,17 @@ fun AgentScreen(
 fun ChatMessageItem(
     message: ChatMessage,
     onOpenSelectionSheet: (List<String>) -> Unit,
-    onReviewCleanup: () -> Unit
+    onReviewCleanup: () -> Unit,
+    onSuggestionClick: (String) -> Unit // --- NEW PARAM ---
 ) {
     val isUser = message.sender == Sender.USER
     val horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
 
-    // --- NEW COLOR SCHEME ---
     val backgroundColor = when (message.sender) {
-        // User: Distinct Primary Color (e.g., Blue/Purple tint)
         Sender.USER -> MaterialTheme.colorScheme.primaryContainer
-        // Agent: Neutral Surface Color (e.g., Grey/White)
         Sender.AGENT -> MaterialTheme.colorScheme.surfaceVariant
         Sender.ERROR -> MaterialTheme.colorScheme.errorContainer
     }
-
     val textColor = when (message.sender) {
         Sender.USER -> MaterialTheme.colorScheme.onPrimaryContainer
         Sender.AGENT -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -146,42 +139,23 @@ fun ChatMessageItem(
         Box(
             modifier = Modifier
                 .widthIn(max = 300.dp)
-                .clip(
-                    RoundedCornerShape(
-                        topStart = 16.dp,
-                        topEnd = 16.dp,
-                        // Rounded bottom corner for the "other" side, sharp corner for "my" side
-                        bottomStart = if (isUser) 16.dp else 4.dp,
-                        bottomEnd = if (isUser) 4.dp else 16.dp
-                    )
-                )
+                .clip(RoundedCornerShape(
+                    topStart = 16.dp, topEnd = 16.dp,
+                    bottomStart = if (isUser) 16.dp else 4.dp,
+                    bottomEnd = if (isUser) 4.dp else 16.dp
+                ))
                 .background(backgroundColor)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 if (message.text.isNotEmpty()) {
-                    Text(
-                        text = message.text,
-                        color = textColor,
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
+                    Text(text = message.text, color = textColor, style = MaterialTheme.typography.bodyLarge)
                 }
 
-                // --- UPDATED VISIBILITY LOGIC ---
-                // We show the grid if:
-                // 1. It's an Agent response with search results (hasSelectionPrompt = true)
-                // 2. OR it's a User message that included images (isUser && has images)
-                val showImages = (!message.imageUris.isNullOrEmpty() && !message.isCleanupPrompt) &&
-                        (message.hasSelectionPrompt || isUser)
-
-                if (showImages) {
+                if ((!message.imageUris.isNullOrEmpty() && !message.isCleanupPrompt) && (message.hasSelectionPrompt || isUser)) {
                     if (message.text.isNotEmpty()) Spacer(modifier = Modifier.height(8.dp))
-                    MediaGridPreview(
-                        uris = message.imageUris!!,
-                        onClick = { onOpenSelectionSheet(message.imageUris) }
-                    )
+                    MediaGridPreview(uris = message.imageUris!!, onClick = { onOpenSelectionSheet(message.imageUris) })
                 }
 
-                // --- CLEANUP BUTTON ---
                 if (message.isCleanupPrompt) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
@@ -196,9 +170,35 @@ fun ChatMessageItem(
                 }
             }
         }
+
+        // --- RENDER SUGGESTIONS OUTSIDE THE BUBBLE ---
+        if (!message.suggestions.isNullOrEmpty()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // Add spacer if right aligned to push chips to right?
+                // Actually standard is left aligned or flowing. Let's keep left for agent.
+                if (isUser) { item { Spacer(modifier = Modifier.weight(1f)) } } // Rough spacer logic doesn't work in LazyRow
+
+                items(message.suggestions) { suggestion ->
+                    SuggestionChip(
+                        onClick = { onSuggestionClick(suggestion.prompt) },
+                        label = { Text(suggestion.label) },
+                        icon = { Icon(Icons.Default.Lightbulb, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                        colors = SuggestionChipDefaults.suggestionChipColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            labelColor = MaterialTheme.colorScheme.primary
+                        ),
+                        border = null // Clean look
+                    )
+                }
+            }
+        }
     }
 }
-
 /**
  * Renders a neat 2x2 grid (or fewer) of images with a "+N more" overlay.
  * Designed to look like a messaging app preview.

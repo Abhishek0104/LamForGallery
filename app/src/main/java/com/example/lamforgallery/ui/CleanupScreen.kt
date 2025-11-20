@@ -20,9 +20,6 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.lamforgallery.utils.CleanupManager
 
-/**
- * Screen to review found duplicates.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CleanupScreen(
@@ -30,10 +27,7 @@ fun CleanupScreen(
     onNavigateBack: () -> Unit,
     onConfirmDelete: (List<String>) -> Unit
 ) {
-    // We track which groups the user has "Approved" for deletion.
-    // By default, all groups are selected.
     val selectedGroups = remember { mutableStateListOf<CleanupManager.DuplicateGroup>().apply { addAll(duplicateGroups) } }
-
     val totalSavings = selectedGroups.sumOf { it.duplicateUris.size }
 
     Scaffold(
@@ -47,26 +41,24 @@ fun CleanupScreen(
                 }
             )
         },
-        bottomBar = {
+        // --- CHANGED TO FAB ---
+        floatingActionButton = {
             if (selectedGroups.isNotEmpty()) {
-                Button(
+                ExtendedFloatingActionButton(
                     onClick = {
-                        // Flatten the list of URIs to delete
                         val allUrisToDelete = selectedGroups.flatMap { it.duplicateUris }
                         onConfirmDelete(allUrisToDelete)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                        .height(56.dp)
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
                 ) {
                     Icon(Icons.Default.Delete, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Delete $totalSavings Duplicates")
+                    Text("Delete $totalSavings Items")
                 }
             }
-        }
+        },
+        floatingActionButtonPosition = FabPosition.End
     ) { paddingValues ->
         if (duplicateGroups.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -75,7 +67,7 @@ fun CleanupScreen(
         } else {
             LazyColumn(
                 modifier = Modifier.padding(paddingValues),
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 80.dp), // Padding for FAB
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 item {

@@ -9,25 +9,32 @@ data class AgentRequest(
     @SerializedName("toolResult") val toolResult: ToolResult? = null,
     @SerializedName("selectedUris") val selectedUris: List<String>? = null,
     @SerializedName("base64Images") val base64Images: List<String>? = null
-
 )
 
 data class ToolResult(
     @SerializedName("tool_call_id") val toolCallId: String,
-    @SerializedName("content") val content: String // Must be a JSON string of the result
+    @SerializedName("content") val content: String
 )
 
 // --- 2. RESPONSE Body Received from Backend ---
 
 data class AgentResponse(
     @SerializedName("sessionId") val sessionId: String,
-    @SerializedName("status") val status: String, // "requires_action" or "complete"
+    @SerializedName("status") val status: String,
     @SerializedName("agentMessage") val agentMessage: String?,
-    @SerializedName("nextActions") val nextActions: List<ToolCall>?
+    @SerializedName("nextActions") val nextActions: List<ToolCall>?,
+    // --- NEW: Suggestions List ---
+    @SerializedName("suggestedActions") val suggestedActions: List<Suggestion>? = null
+)
+
+// --- NEW: Suggestion Item ---
+data class Suggestion(
+    @SerializedName("label") val label: String,  // Text shown on button (e.g. "Delete Duplicates")
+    @SerializedName("prompt") val prompt: String // Hidden command sent to agent (e.g. "Delete the duplicates you found")
 )
 
 data class ToolCall(
     @SerializedName("id") val id: String,
     @SerializedName("name") val name: String,
-    @SerializedName("args") val args: Map<String, Any> // Gson handles this generic map
+    @SerializedName("args") val args: Map<String, Any>
 )
