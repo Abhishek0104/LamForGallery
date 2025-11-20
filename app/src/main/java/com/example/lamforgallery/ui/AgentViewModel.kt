@@ -1,3 +1,4 @@
+// ... (imports remain same) ...
 package com.example.lamforgallery.ui
 
 import android.app.Application
@@ -20,7 +21,7 @@ import com.example.lamforgallery.ml.TextEncoder
 import com.example.lamforgallery.utils.SimilarityUtil
 import com.example.lamforgallery.database.AppDatabase
 import com.example.lamforgallery.utils.CleanupManager
-import com.example.lamforgallery.utils.ImageHelper // --- NEW IMPORT ---
+import com.example.lamforgallery.utils.ImageHelper
 import com.google.gson.Gson
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,8 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
-// --- STATE DEFINITIONS ---
-
+// ... (State definitions remain same) ...
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val text: String,
@@ -71,7 +71,7 @@ data class AgentUiState(
 enum class PermissionType { DELETE, WRITE }
 
 class AgentViewModel(
-    private val application: Application, // Changed to property for access in sendUserInput
+    private val application: Application,
     private val agentApi: AgentApiService,
     private val galleryTools: GalleryTools,
     private val gson: Gson,
@@ -129,25 +129,28 @@ class AgentViewModel(
         _uiState.update { it.copy(selectedImageUris = emptySet()) }
 
         viewModelScope.launch {
-            addMessage(ChatMessage(text = input, sender = Sender.USER))
+            // --- FIX: Attach selected images to the User's Message ---
+            addMessage(ChatMessage(
+                text = input,
+                sender = Sender.USER,
+                imageUris = selectedUris.ifEmpty { null } // Show images if present
+            ))
+            // --- END FIX ---
+
             setStatus(AgentStatus.Loading("Thinking..."))
 
-            // --- NEW: CHECK FOR IMAGES TO SEND ---
             var base64Images: List<String>? = null
 
             if (selectedUris.isNotEmpty()) {
-                // If user selected images, we compress and send them!
-                // This allows "Analyze this" or "Compare these" commands.
                 setStatus(AgentStatus.Loading("Reading images..."))
                 try {
                     val images = ImageHelper.encodeImages(application, selectedUris)
                     if (images.isNotEmpty()) {
                         base64Images = images
-                        Log.d(TAG, "Encoded ${images.size} images for agent analysis.")
+                        Log.d(TAG, "Encoded ${images.size} images for visual analysis.")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to encode images", e)
-                    // We continue anyway, just without the visual payload
+                    Log.e(TAG, "Failed to encode images for agent", e)
                 }
                 setStatus(AgentStatus.Loading("Thinking..."))
             }
@@ -157,14 +160,13 @@ class AgentViewModel(
                 userInput = input,
                 toolResult = null,
                 selectedUris = selectedUris.ifEmpty { null },
-                base64Images = base64Images // --- PASSING THE IMAGES ---
+                base64Images = base64Images
             )
             handleAgentRequest(request)
         }
     }
 
-    // ... (Rest of the class: onPermissionResult, handleAgentRequest, executeLocalTool remain unchanged) ...
-
+    // ... (Rest of the class functions remain identical to previous file) ...
     fun onPermissionResult(wasSuccessful: Boolean, type: PermissionType) {
         val toolCallId = pendingToolCallId
         val args = pendingToolArgs
