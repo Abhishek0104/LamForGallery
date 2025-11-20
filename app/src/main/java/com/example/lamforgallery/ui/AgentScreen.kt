@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,18 +37,20 @@ import kotlinx.coroutines.launch
  * Updated Chat UI with "WhatsApp-style" inline media grids.
  */
 
+// ... (AgentScreen function signature update) ...
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentScreen(
     viewModel: AgentViewModel,
-    onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit
+    onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit,
+    onNavigateToCleanup: () -> Unit = {} // --- NEW PARAM ---
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState()
 
-    // Bottom Sheet Logic
+    // ... (Bottom Sheet Logic same as before) ...
     if (uiState.isSelectionSheetOpen) {
         ModalBottomSheet(
             onDismissRequest = { viewModel.closeSelectionSheet() },
@@ -105,8 +108,9 @@ fun AgentScreen(
             items(uiState.messages, key = { it.id }) { message ->
                 ChatMessageItem(
                     message = message,
-                    // When a user taps the grid, we open the FULL selection sheet
-                    onOpenSelectionSheet = { uris -> viewModel.openSelectionSheet(uris) }
+                    onOpenSelectionSheet = { uris -> viewModel.openSelectionSheet(uris) },
+                    // --- NEW: Pass cleanup callback ---
+                    onReviewCleanup = onNavigateToCleanup
                 )
                 Spacer(modifier = Modifier.height(12.dp))
             }
@@ -118,7 +122,8 @@ fun AgentScreen(
 @Composable
 fun ChatMessageItem(
     message: ChatMessage,
-    onOpenSelectionSheet: (List<String>) -> Unit
+    onOpenSelectionSheet: (List<String>) -> Unit,
+    onReviewCleanup: () -> Unit
 ) {
     val isUser = message.sender == Sender.USER
     val horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
@@ -137,15 +142,8 @@ fun ChatMessageItem(
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = horizontalAlignment) {
         Box(
             modifier = Modifier
-                .widthIn(max = 300.dp) // Constrain width for chat bubble look
-                .clip(
-                    RoundedCornerShape(
-                        topStart = 16.dp,
-                        topEnd = 16.dp,
-                        bottomStart = if (isUser) 16.dp else 4.dp,
-                        bottomEnd = if (isUser) 4.dp else 16.dp
-                    )
-                )
+                .widthIn(max = 300.dp)
+                .clip(RoundedCornerShape(16.dp))
                 .background(backgroundColor)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
@@ -157,16 +155,28 @@ fun ChatMessageItem(
                     )
                 }
 
-                // --- NEW MEDIA GRID LOGIC ---
-                if (!message.imageUris.isNullOrEmpty()) {
+                // --- EXISTING MEDIA GRID ---
+                if (!message.imageUris.isNullOrEmpty() && !message.isCleanupPrompt) {
                     if (message.text.isNotEmpty()) Spacer(modifier = Modifier.height(8.dp))
-
                     MediaGridPreview(
                         uris = message.imageUris,
                         onClick = { onOpenSelectionSheet(message.imageUris) }
                     )
                 }
-                // --- END MEDIA GRID ---
+
+                // --- NEW CLEANUP BUTTON ---
+                if (message.isCleanupPrompt) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = onReviewCleanup,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Review Duplicates")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
+                    }
+                }
             }
         }
     }

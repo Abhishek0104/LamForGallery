@@ -1,3 +1,4 @@
+// ... (Imports same as before) ...
 package com.example.lamforgallery.ui
 
 import android.Manifest
@@ -37,7 +38,8 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 class MainActivity : ComponentActivity() {
-
+    // ... (MainActivity Code same as previous uploads) ...
+    // ... (Just omitting the boilerplate for brevity, assume standard setup) ...
     private val TAG = "MainActivity"
     private val factory by lazy { ViewModelFactory(application) }
 
@@ -139,8 +141,9 @@ fun AppNavigationHost(
                 onTabSelected = { selectedTab = it },
                 onAlbumClick = { encodedName -> navController.navigate("album_detail/$encodedName") },
                 onLaunchPermissionRequest = onLaunchPermissionRequest,
-                // --- NEW: Pass navigation to single photo ---
-                onPhotoClick = { encodedUri -> navController.navigate("view_photo/$encodedUri") }
+                onPhotoClick = { encodedUri -> navController.navigate("view_photo/$encodedUri") },
+                // --- NEW CALLBACK for Cleanup Navigation ---
+                onNavigateToCleanup = { navController.navigate("cleanup_review") }
             )
         }
         composable(
@@ -151,8 +154,6 @@ fun AppNavigationHost(
             val albumDetailViewModel: AlbumDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
             AlbumDetailScreen(albumName = albumName, viewModel = albumDetailViewModel, onNavigateBack = { navController.popBackStack() })
         }
-
-        // --- NEW ROUTE: Single Photo Viewer ---
         composable(
             route = "view_photo/{photoUri}",
             arguments = listOf(navArgument("photoUri") { type = NavType.StringType })
@@ -162,14 +163,27 @@ fun AppNavigationHost(
                 photoUriEncoded = photoUri,
                 onNavigateBack = { navController.popBackStack() },
                 onAgentAction = { prompt ->
-                    // 1. Set the single photo as the selection
                     val decodedUri = java.net.URLDecoder.decode(photoUri, java.nio.charset.StandardCharsets.UTF_8.name())
                     agentViewModel.setExternalSelection(listOf(decodedUri))
-
-                    // 2. Navigate back to main, then switch tab, then send prompt
                     navController.popBackStack("main", inclusive = false)
                     selectedTab = "agent"
-                    agentViewModel.sendUserInput(prompt) // Auto-send the prompt
+                    agentViewModel.sendUserInput(prompt)
+                }
+            )
+        }
+        // --- NEW ROUTE: Cleanup Screen ---
+        composable("cleanup_review") {
+            val uiState by agentViewModel.uiState.collectAsState()
+            CleanupScreen(
+                duplicateGroups = uiState.cleanupGroups,
+                onNavigateBack = { navController.popBackStack() },
+                onConfirmDelete = { urisToDelete ->
+                    // Go back to Agent tab and tell the agent to delete them
+                    navController.popBackStack()
+                    // We synthesize a user command so the agent uses its normal 'delete_photos' tool flow
+                    // This is safer than doing it manually because it handles permissions & UI state.
+                    agentViewModel.setExternalSelection(urisToDelete)
+                    agentViewModel.sendUserInput("Delete these duplicates")
                 }
             )
         }
@@ -186,9 +200,16 @@ fun AppShell(
     selectedTab: String,
     onTabSelected: (String) -> Unit,
     onAlbumClick: (String) -> Unit,
-    onPhotoClick: (String) -> Unit, // --- NEW PARAMETER ---
-    onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit
+    onPhotoClick: (String) -> Unit,
+    onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit,
+    onNavigateToCleanup: () -> Unit // --- NEW PARAMETER ---
 ) {
+    // Check for cleanup prompt
+    val uiState by agentViewModel.uiState.collectAsState()
+
+    // If the last message was a cleanup result, we can show a "Review" button overlay or rely on a custom Chat Item
+    // But for now, let's modify AgentScreen to accept this callback.
+
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -204,10 +225,14 @@ fun AppShell(
                 "photos" -> PhotosScreen(
                     viewModel = photosViewModel,
                     onSendToAgent = { uris -> agentViewModel.setExternalSelection(uris); onTabSelected("agent") },
-                    onPhotoClick = onPhotoClick // --- PASS IT DOWN ---
+                    onPhotoClick = onPhotoClick
                 )
                 "albums" -> AlbumsScreen(viewModel = albumsViewModel, onAlbumClick = onAlbumClick)
-                "agent" -> AgentScreen(viewModel = agentViewModel, onLaunchPermissionRequest = onLaunchPermissionRequest)
+                "agent" -> AgentScreen(
+                    viewModel = agentViewModel,
+                    onLaunchPermissionRequest = onLaunchPermissionRequest,
+                    onNavigateToCleanup = onNavigateToCleanup // --- PASS IT HERE ---
+                )
                 "indexing" -> EmbeddingScreen(viewModel = embeddingViewModel)
             }
         }
