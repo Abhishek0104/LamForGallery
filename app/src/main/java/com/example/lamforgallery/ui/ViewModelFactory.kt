@@ -37,7 +37,8 @@ class ViewModelFactory(
             modelClass.isAssignableFrom(AgentViewModel::class.java) -> {
                 AgentViewModel(
                     application, agentApi, galleryTools, gson,
-                    imageEmbeddingDao, clipTokenizer, textEncoder,
+                    imageEmbeddingDao, personDao, clipTokenizer,
+                    textEncoder,
                     cleanupManager
                 ) as T
             }

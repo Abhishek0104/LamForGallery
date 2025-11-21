@@ -25,4 +25,9 @@ interface PersonDao {
     // --- FIX: Ensure no trailing comma before WHERE ---
     @Query("UPDATE people SET embedding = :newEmbeddingBytes, faceCount = :newCount WHERE id = :personId")
     suspend fun updateEmbedding(personId: String, newEmbeddingBytes: ByteArray, newCount: Int)
+
+    @Query("SELECT uri FROM image_people WHERE personId IN (:personIds)")
+    suspend fun getUrisForPeople(personIds: List<String>): List<String>
+
+
 }
