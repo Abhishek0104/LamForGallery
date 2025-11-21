@@ -20,7 +20,10 @@ import androidx.compose.material.icons.filled.PhotoAlbum
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
@@ -30,7 +33,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import kotlinx.coroutines.launch
-import java.net.URLEncoder
+import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
 class MainActivity : ComponentActivity() {
@@ -41,7 +44,6 @@ class MainActivity : ComponentActivity() {
     private val photosViewModel: PhotosViewModel by viewModels { factory }
     private val albumsViewModel: AlbumsViewModel by viewModels { factory }
     private val embeddingViewModel: EmbeddingViewModel by viewModels { factory }
-    // --- NEW VM ---
     private val photoViewerViewModel: PhotoViewerViewModel by viewModels { factory }
 
     private val permissionToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -76,6 +78,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         setContent {
+            // Apply Custom Theme Here (assuming standard MaterialTheme for now)
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     if (isPermissionGranted) {
@@ -85,7 +88,7 @@ class MainActivity : ComponentActivity() {
                             photosViewModel = photosViewModel,
                             albumsViewModel = albumsViewModel,
                             embeddingViewModel = embeddingViewModel,
-                            photoViewerViewModel = photoViewerViewModel, // Pass it down
+                            photoViewerViewModel = photoViewerViewModel,
                             onLaunchPermissionRequest = { intentSender, type ->
                                 currentPermissionType = type
                                 permissionRequestLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
@@ -121,7 +124,7 @@ fun AppNavigationHost(
     photosViewModel: PhotosViewModel,
     albumsViewModel: AlbumsViewModel,
     embeddingViewModel: EmbeddingViewModel,
-    photoViewerViewModel: PhotoViewerViewModel, // New parameter
+    photoViewerViewModel: PhotoViewerViewModel,
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit
 ) {
     val navController = rememberNavController()
@@ -139,15 +142,12 @@ fun AppNavigationHost(
                 onAlbumClick = { encodedName -> navController.navigate("album_detail/$encodedName") },
                 onLaunchPermissionRequest = onLaunchPermissionRequest,
                 onPhotoClick = { encodedUri ->
-                    // --- LOGIC CHANGE: Set the playlist before navigating ---
                     val currentList = photosViewModel.uiState.value.photos
                     val uri = try {
-                        java.net.URLDecoder.decode(encodedUri, "UTF-8")
+                        URLDecoder.decode(encodedUri, StandardCharsets.UTF_8.name())
                     } catch(e:Exception) { encodedUri }
 
                     photoViewerViewModel.setPhotoList(currentList, uri)
-                    // We still pass URI for route uniqueness/deep-linking logic,
-                    // but SinglePhotoScreen will use the VM
                     navController.navigate("view_photo")
                 },
                 onNavigateToCleanup = { navController.navigate("cleanup_review") }
@@ -165,7 +165,6 @@ fun AppNavigationHost(
                 viewModel = albumDetailViewModel,
                 onNavigateBack = { navController.popBackStack() },
                 onPhotoClick = { uri ->
-                    // Also allow swiping from Album View
                     val currentList = albumDetailViewModel.uiState.value.photos
                     photoViewerViewModel.setPhotoList(currentList, uri)
                     navController.navigate("view_photo")
@@ -173,7 +172,6 @@ fun AppNavigationHost(
             )
         }
 
-        // --- CHANGED: Removed URI arg from route, data comes from VM ---
         composable("view_photo") {
             SinglePhotoScreen(
                 viewModel = photoViewerViewModel,
@@ -218,14 +216,47 @@ fun AppShell(
 ) {
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                NavigationBarItem(selected = selectedTab == "photos", onClick = { onTabSelected("photos") }, icon = { Icon(Icons.Default.Photo, "Photos") }, label = { Text("Photos") })
-                NavigationBarItem(selected = selectedTab == "albums", onClick = { onTabSelected("albums") }, icon = { Icon(Icons.Default.PhotoAlbum, "Albums") }, label = { Text("Albums") })
-                NavigationBarItem(selected = selectedTab == "agent", onClick = { onTabSelected("agent") }, icon = { Icon(Icons.Default.ChatBubble, "Agent") }, label = { Text("Agent") })
-                NavigationBarItem(selected = selectedTab == "indexing", onClick = { onTabSelected("indexing") }, icon = { Icon(Icons.Default.ImageSearch, "Indexing") }, label = { Text("Indexing") })
+            // --- NEW: Glassmorphism Navigation Bar ---
+            NavigationBar(
+                // Use a slightly transparent surface color for the glass effect
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                // Optional: Add blur if supported (requires Android 12+ render effect modifier, skipping for simplicity)
+            ) {
+                NavigationBarItem(
+                    selected = selectedTab == "photos",
+                    onClick = { onTabSelected("photos") },
+                    icon = { Icon(Icons.Default.Photo, "Photos") },
+                    label = { Text("Photos") },
+                    colors = NavigationBarItemDefaults.colors(
+                        indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                        selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                )
+                NavigationBarItem(
+                    selected = selectedTab == "albums",
+                    onClick = { onTabSelected("albums") },
+                    icon = { Icon(Icons.Default.PhotoAlbum, "Albums") },
+                    label = { Text("Albums") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == "agent",
+                    onClick = { onTabSelected("agent") },
+                    icon = { Icon(Icons.Default.ChatBubble, "Agent") },
+                    label = { Text("Agent") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == "indexing",
+                    onClick = { onTabSelected("indexing") },
+                    icon = { Icon(Icons.Default.ImageSearch, "Indexing") },
+                    label = { Text("Indexing") }
+                )
             }
         }
     ) { paddingValues ->
+        // We pass paddingValues down, but for a true "behind the nav bar" effect
+        // on the photos screen, we might want to ignore the bottom padding
+        // and handle it inside the list content padding.
+        // For now, standard behavior is safer to avoid overlap issues.
         Box(modifier = Modifier.padding(paddingValues)) {
             when (selectedTab) {
                 "photos" -> PhotosScreen(
@@ -240,6 +271,19 @@ fun AppShell(
                     onNavigateToCleanup = onNavigateToCleanup
                 )
                 "indexing" -> EmbeddingScreen(viewModel = embeddingViewModel)
+            }
+        }
+    }
+}
+
+@Composable
+fun PermissionDeniedScreen(onRequestPermission: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Permission Required")
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onRequestPermission) {
+                Text("Grant Access")
             }
         }
     }

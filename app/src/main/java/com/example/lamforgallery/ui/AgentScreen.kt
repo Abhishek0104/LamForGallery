@@ -1,7 +1,6 @@
 package com.example.lamforgallery.ui
 
 import android.content.IntentSender
-import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -9,17 +8,20 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,13 +33,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
-
-/**
- * Updated Chat UI with "WhatsApp-style" inline media grids.
- */
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,7 +48,7 @@ fun AgentScreen(
     val coroutineScope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState()
 
-    // ... (Bottom Sheet Logic) ...
+    // --- Bottom Sheet Logic ---
     if (uiState.isSelectionSheetOpen) {
         ModalBottomSheet(
             onDismissRequest = { viewModel.closeSelectionSheet() },
@@ -65,7 +62,7 @@ fun AgentScreen(
         }
     }
 
-    // ... (Permission Logic) ...
+    // --- Permission Logic ---
     LaunchedEffect(uiState.currentStatus) {
         val status = uiState.currentStatus
         if (status is AgentStatus.RequiresPermission) {
@@ -73,17 +70,31 @@ fun AgentScreen(
         }
     }
 
-    // ... (Scroll Logic) ...
+    // --- Scroll Logic ---
     LaunchedEffect(uiState.messages.size) {
         if (uiState.messages.isNotEmpty()) {
-            coroutineScope.launch {
-                listState.animateScrollToItem(uiState.messages.size - 1)
-            }
+            listState.animateScrollToItem(uiState.messages.size - 1)
         }
     }
 
     Scaffold(
+        topBar = {
+            // --- NEW: Glassmorphism Header ---
+            TopAppBar(
+                title = {
+                    Text(
+                        "AI Assistant",
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                )
+            )
+        },
         bottomBar = {
+            // --- NEW: Premium Chat Input ---
             ChatInputBar(
                 status = uiState.currentStatus,
                 selectionCount = uiState.selectedImageUris.size,
@@ -99,13 +110,59 @@ fun AgentScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.Bottom
         ) {
+            // --- NEW: Helpful Empty State ---
+            if (uiState.messages.isEmpty()) {
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillParentMaxSize()
+                            .padding(bottom = 100.dp), // Push up slightly to avoid keyboard overlap area
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "How can I help?",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                        )
+                        Spacer(Modifier.height(24.dp))
+
+                        val suggestions = listOf(
+                            "Show photos of food",
+                            "Find receipts from last week",
+                            "Scan for duplicates",
+                            "Create a collage"
+                        )
+
+                        suggestions.forEach { text ->
+                            SuggestionChip(
+                                onClick = { viewModel.sendUserInput(text) },
+                                label = { Text(text) },
+                                icon = { Icon(Icons.Default.Lightbulb, null, Modifier.size(14.dp)) },
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
             item { Spacer(modifier = Modifier.height(16.dp)) }
             items(uiState.messages, key = { it.id }) { message ->
                 ChatMessageItem(
                     message = message,
                     onOpenSelectionSheet = { uris -> viewModel.openSelectionSheet(uris) },
                     onReviewCleanup = onNavigateToCleanup,
-                    onSuggestionClick = { prompt -> viewModel.sendUserInput(prompt) } // --- CONNECTED HERE ---
+                    onSuggestionClick = { prompt -> viewModel.sendUserInput(prompt) }
                 )
                 Spacer(modifier = Modifier.height(12.dp))
             }
@@ -119,18 +176,19 @@ fun ChatMessageItem(
     message: ChatMessage,
     onOpenSelectionSheet: (List<String>) -> Unit,
     onReviewCleanup: () -> Unit,
-    onSuggestionClick: (String) -> Unit // --- NEW PARAM ---
+    onSuggestionClick: (String) -> Unit
 ) {
     val isUser = message.sender == Sender.USER
     val horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
 
+    // Updated Colors for "Premium" feel
     val backgroundColor = when (message.sender) {
-        Sender.USER -> MaterialTheme.colorScheme.primaryContainer
+        Sender.USER -> MaterialTheme.colorScheme.primary
         Sender.AGENT -> MaterialTheme.colorScheme.surfaceVariant
         Sender.ERROR -> MaterialTheme.colorScheme.errorContainer
     }
     val textColor = when (message.sender) {
-        Sender.USER -> MaterialTheme.colorScheme.onPrimaryContainer
+        Sender.USER -> MaterialTheme.colorScheme.onPrimary
         Sender.AGENT -> MaterialTheme.colorScheme.onSurfaceVariant
         Sender.ERROR -> MaterialTheme.colorScheme.onErrorContainer
     }
@@ -160,7 +218,10 @@ fun ChatMessageItem(
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
                         onClick = onReviewCleanup,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.background,
+                            contentColor = MaterialTheme.colorScheme.primary
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Review Duplicates")
@@ -171,17 +232,14 @@ fun ChatMessageItem(
             }
         }
 
-        // --- RENDER SUGGESTIONS OUTSIDE THE BUBBLE ---
         if (!message.suggestions.isNullOrEmpty()) {
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(horizontal = 4.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // Add spacer if right aligned to push chips to right?
-                // Actually standard is left aligned or flowing. Let's keep left for agent.
-                if (isUser) { item { Spacer(modifier = Modifier.weight(1f)) } } // Rough spacer logic doesn't work in LazyRow
+                if (isUser) { item { Spacer(modifier = Modifier.weight(1f)) } }
 
                 items(message.suggestions) { suggestion ->
                     SuggestionChip(
@@ -192,17 +250,14 @@ fun ChatMessageItem(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant,
                             labelColor = MaterialTheme.colorScheme.primary
                         ),
-                        border = null // Clean look
+                        border = null
                     )
                 }
             }
         }
     }
 }
-/**
- * Renders a neat 2x2 grid (or fewer) of images with a "+N more" overlay.
- * Designed to look like a messaging app preview.
- */
+
 @Composable
 fun MediaGridPreview(
     uris: List<String>,
@@ -218,7 +273,6 @@ fun MediaGridPreview(
             .clip(RoundedCornerShape(cornerRadius))
             .clickable(onClick = onClick)
     ) {
-        // Row 1
         Row(modifier = Modifier.height(100.dp)) {
             MediaGridItem(uri = uris[0], modifier = Modifier.weight(1f))
             if (displayCount >= 2) {
@@ -227,7 +281,6 @@ fun MediaGridPreview(
             }
         }
 
-        // Row 2 (if needed)
         if (displayCount >= 3) {
             Spacer(modifier = Modifier.height(2.dp))
             Row(modifier = Modifier.height(100.dp)) {
@@ -236,8 +289,6 @@ fun MediaGridPreview(
                     Spacer(modifier = Modifier.width(2.dp))
                     Box(modifier = Modifier.weight(1f)) {
                         MediaGridItem(uri = uris[3], modifier = Modifier.fillMaxSize())
-
-                        // Overlay for "+X more"
                         if (extraCount > 0) {
                             Box(
                                 modifier = Modifier
@@ -255,7 +306,6 @@ fun MediaGridPreview(
                         }
                     }
                 } else {
-                    // Empty space filler to keep alignment
                     Spacer(modifier = Modifier.weight(1f))
                 }
             }
@@ -273,7 +323,6 @@ fun MediaGridItem(uri: String, modifier: Modifier = Modifier) {
     )
 }
 
-// ... (SelectionBottomSheet and ChatInputBar remain mostly the same) ...
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SelectionBottomSheet(uris: List<String>, onCancel: () -> Unit, onConfirm: (Set<String>) -> Unit) {
@@ -287,7 +336,6 @@ fun SelectionBottomSheet(uris: List<String>, onCancel: () -> Unit, onConfirm: (S
                 navigationIcon = { IconButton(onClick = onCancel) { Icon(Icons.Default.Close, contentDescription = "Close") } }
             )
         },
-        // --- MOVED BUTTON TO FLOATING ACTION BUTTON ---
         floatingActionButton = {
             if (selectionCount > 0) {
                 ExtendedFloatingActionButton(
@@ -302,11 +350,13 @@ fun SelectionBottomSheet(uris: List<String>, onCancel: () -> Unit, onConfirm: (S
             }
         },
         floatingActionButtonPosition = FabPosition.End
-        // --- REMOVED BOTTOM APP BAR ---
     ) { paddingValues ->
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 100.dp),
-            modifier = Modifier.fillMaxSize().padding(paddingValues).padding(8.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(8.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -333,7 +383,12 @@ fun SelectablePhotoItem(uri: String, isSelected: Boolean, onToggle: () -> Unit) 
         AsyncImage(model = uri, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         if (isSelected) {
             Box(
-                modifier = Modifier.padding(8.dp).align(Alignment.TopEnd).size(24.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                modifier = Modifier
+                    .padding(8.dp)
+                    .align(Alignment.TopEnd)
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp))
@@ -342,32 +397,129 @@ fun SelectablePhotoItem(uri: String, isSelected: Boolean, onToggle: () -> Unit) 
     }
 }
 
+// --- NEW: Floating Pill Input Bar ---
 @Composable
 fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> Unit) {
     var inputText by remember { mutableStateOf("") }
     val isEnabled = status is AgentStatus.Idle
-    Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(16.dp)) {
-        if (status !is AgentStatus.Idle || selectionCount > 0) {
-            Box(modifier = Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.CenterStart) {
-                when (status) {
-                    is AgentStatus.Loading -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(status.message, style = MaterialTheme.typography.bodySmall)
-                    }
-                    is AgentStatus.RequiresPermission -> Text("Waiting for permission...", style = MaterialTheme.typography.bodySmall)
-                    is AgentStatus.Idle -> Text("$selectionCount image(s) selected", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+
+    // Using Surface for elevation and background
+    Surface(
+        tonalElevation = 2.dp,
+        shadowElevation = 8.dp,
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp)) {
+
+            // 1. Context Indicator (if images selected)
+            if (selectionCount > 0) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .padding(bottom = 8.dp)
+                        .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.Image, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "$selectionCount images attached",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
-        }
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(value = inputText, onValueChange = { inputText = it }, label = { Text("Your command...") }, modifier = Modifier.weight(1f), maxLines = 1, singleLine = true, enabled = isEnabled)
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(onClick = { onSend(inputText); inputText = "" }, enabled = isEnabled && (inputText.isNotBlank() || selectionCount > 0), modifier = Modifier.height(56.dp)) { Text("Send") }
+
+            // 2. Status Indicator (Loading/Permission)
+            if (status !is AgentStatus.Idle) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
+                ) {
+                    if (status is AgentStatus.Loading) {
+                        CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(status.message, style = MaterialTheme.typography.labelSmall)
+                    } else if (status is AgentStatus.RequiresPermission) {
+                        Text("Waiting for permission...", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            // 3. The Floating Pill Input
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), CircleShape)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                TextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    placeholder = { Text("Ask your gallery...", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 8.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent
+                    ),
+                    maxLines = 3,
+                    enabled = isEnabled
+                )
+
+                // Send Button
+                IconButton(
+                    onClick = { onSend(inputText); inputText = "" },
+                    enabled = isEnabled && (inputText.isNotBlank() || selectionCount > 0),
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(
+                            if (isEnabled && (inputText.isNotBlank() || selectionCount > 0)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                            CircleShape
+                        )
+                ) {
+                    Icon(
+                        Icons.Default.ArrowUpward,
+                        contentDescription = "Send",
+                        tint = if (isEnabled && (inputText.isNotBlank() || selectionCount > 0)) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-fun PermissionDeniedScreen(onRequestPermission: () -> Unit) { /* Same as before */ }
+fun AgentPermissionDeniedScreen(onRequestPermission: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "Permission Required",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "This app needs permission to read your photos to work.",
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(onClick = onRequestPermission) {
+                Text("Grant Permission")
+            }
+        }
+    }
+}
