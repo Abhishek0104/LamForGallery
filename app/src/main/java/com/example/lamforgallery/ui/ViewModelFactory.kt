@@ -23,6 +23,9 @@ class ViewModelFactory(
     private val agentApi: AgentApiService by lazy { NetworkModule.apiService }
     private val appDatabase: AppDatabase by lazy { AppDatabase.getDatabase(application) }
     private val imageEmbeddingDao: ImageEmbeddingDao by lazy { appDatabase.imageEmbeddingDao() }
+    // --- NEW: Person Dao ---
+    private val personDao by lazy { appDatabase.personDao() }
+
     private val imageEncoder: ImageEncoder by lazy { ImageEncoder(application) }
     private val clipTokenizer: ClipTokenizer by lazy { ClipTokenizer(application) }
     private val textEncoder: TextEncoder by lazy { TextEncoder(application) }
@@ -42,8 +45,9 @@ class ViewModelFactory(
             modelClass.isAssignableFrom(AlbumsViewModel::class.java) -> AlbumsViewModel(galleryTools) as T
             modelClass.isAssignableFrom(AlbumDetailViewModel::class.java) -> AlbumDetailViewModel(galleryTools) as T
             modelClass.isAssignableFrom(EmbeddingViewModel::class.java) -> EmbeddingViewModel(application, imageEmbeddingDao, imageEncoder, galleryTools) as T
-            // --- THIS WAS MISSING OR NOT SAVED ---
             modelClass.isAssignableFrom(PhotoViewerViewModel::class.java) -> PhotoViewerViewModel() as T
+            // --- NEW: People ViewModel ---
+            modelClass.isAssignableFrom(PeopleViewModel::class.java) -> PeopleViewModel(personDao) as T
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }
     }

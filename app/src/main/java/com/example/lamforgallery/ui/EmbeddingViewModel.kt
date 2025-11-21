@@ -2,6 +2,8 @@ package com.example.lamforgallery.ui
 
 import android.app.Application
 import android.content.ContentUris
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
@@ -9,16 +11,27 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.lamforgallery.database.AppDatabase
 import com.example.lamforgallery.database.ImageEmbedding
 import com.example.lamforgallery.database.ImageEmbeddingDao
+import com.example.lamforgallery.database.ImagePersonCrossRef
+import com.example.lamforgallery.database.Person
+import com.example.lamforgallery.ml.FaceEncoder
 import com.example.lamforgallery.ml.ImageEncoder
 import com.example.lamforgallery.tools.GalleryTools
+import com.example.lamforgallery.utils.SimilarityUtil
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import java.nio.ByteBuffer
 
 data class EmbeddingUiState(
     val statusMessage: String = "Ready to index. Press 'Start' to begin.",
@@ -39,6 +52,20 @@ class EmbeddingViewModel(
     val uiState: StateFlow<EmbeddingUiState> = _uiState.asStateFlow()
     private val contentResolver = application.contentResolver
 
+    // New Components for Face Logic
+    private val db = AppDatabase.getDatabase(application)
+    private val personDao = db.personDao()
+    private val faceEncoder = FaceEncoder(application)
+    private val faceDetector = FaceDetection.getClient(
+        FaceDetectorOptions.Builder()
+            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+            // --- CHANGE: Allow smaller faces (0.1 is default, maybe explicit 0.15 helps filter noise?) ---
+            .setMinFaceSize(0.1f)
+            .build()
+    )
+
     companion object { private const val TAG = "EmbeddingViewModel" }
 
     init {
@@ -58,14 +85,15 @@ class EmbeddingViewModel(
             _uiState.update { it.copy(isIndexing = true, statusMessage = "Starting...", progress = 0f) }
 
             try {
-                _uiState.update { it.copy(statusMessage = "Scanning device for images...") }
                 val allImageUris = getAllImageUris()
                 val indexedUris = dao.getAllEmbeddings().map { it.uri }.toSet()
+                // --- CHANGE: Re-index everything to test face logic if needed, or stick to new ---
+                // For debugging, you might want to temporarily comment out this filter:
                 val newImages = allImageUris.filter { !indexedUris.contains(it.toString()) }
                 val totalNewImages = newImages.size
 
                 if (totalNewImages == 0) {
-                    _uiState.update { it.copy(isIndexing = false, statusMessage = "All ${allImageUris.size} images are already indexed!", totalImages = allImageUris.size, indexedImages = allImageUris.size) }
+                    _uiState.update { it.copy(isIndexing = false, statusMessage = "All caught up! (Clear app data to re-index)", totalImages = allImageUris.size, indexedImages = allImageUris.size) }
                     return@launch
                 }
 
@@ -73,22 +101,15 @@ class EmbeddingViewModel(
                     val imageNumber = index + 1
                     _uiState.update { it.copy(statusMessage = "Indexing $imageNumber of $totalNewImages...", progress = imageNumber.toFloat() / totalNewImages.toFloat()) }
 
+                    var bitmap: Bitmap? = null
                     try {
-                        // 1. Decode Bitmap
-                        val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                            ImageDecoder.decodeBitmap(ImageDecoder.createSource(contentResolver, uri))
-                        } else {
-                            @Suppress("DEPRECATION")
-                            MediaStore.Images.Media.getBitmap(contentResolver, uri)
-                        }
+                        bitmap = loadBitmap(uri)
+                        if (bitmap == null) return@forEachIndexed
 
-                        // 2. Generate Embedding
+                        // 1. Scene Embedding (CLIP)
                         val embedding = imageEncoder.encode(bitmap)
-
-                        // 3. Extract All Metadata (Location, Date, Model, Dims)
                         val info = galleryTools.extractImageInfo(uri.toString())
 
-                        // 4. Save to DB
                         dao.insert(ImageEmbedding(
                             uri = uri.toString(),
                             embedding = embedding,
@@ -99,16 +120,133 @@ class EmbeddingViewModel(
                             cameraModel = info.cameraModel
                         ))
 
+                        // 2. Face Recognition (New)
+                        processFaces(bitmap, uri.toString())
+
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to process image $uri: ${e.message}", e)
+                    } finally {
+                        bitmap?.recycle()
                     }
                 }
 
-                _uiState.update { it.copy(isIndexing = false, statusMessage = "Indexing complete! Added $totalNewImages new images.", progress = 1f, totalImages = allImageUris.size, indexedImages = allImageUris.size) }
+                _uiState.update { it.copy(isIndexing = false, statusMessage = "Done! Added $totalNewImages new images.", progress = 1f) }
 
             } catch (e: Exception) {
                 _uiState.update { it.copy(isIndexing = false, statusMessage = "Error: ${e.message}") }
             }
+        }
+    }
+
+    private fun loadBitmap(uri: Uri): Bitmap? {
+        return try {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+
+            val targetSize = 1024
+            var scale = 1
+            while (options.outWidth / scale / 2 >= targetSize && options.outHeight / scale / 2 >= targetSize) {
+                scale *= 2
+            }
+
+            val loadOptions = BitmapFactory.Options().apply { inSampleSize = scale }
+            contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, loadOptions) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load bitmap: ${e.message}")
+            null
+        }
+    }
+
+    // Helper function to convert FloatArray -> ByteArray
+    private fun floatArrayToByteArray(floats: FloatArray): ByteArray {
+        val buffer = ByteBuffer.allocate(floats.size * 4)
+        buffer.asFloatBuffer().put(floats)
+        return buffer.array()
+    }
+
+    private suspend fun identifyAndLinkPerson(
+        newVector: FloatArray,
+        uri: String,
+        bounds: android.graphics.Rect,
+        imageWidth: Int,
+        imageHeight: Int
+    ) {
+        val allPeople = personDao.getAllPeople()
+        var bestMatch: Person? = null
+        var bestSim = 0f
+
+        for (person in allPeople) {
+            val sim = SimilarityUtil.cosineSimilarity(newVector, person.embedding)
+            if (sim > bestSim) {
+                bestSim = sim
+                bestMatch = person
+            }
+        }
+
+        val threshold = 0.5f // 0.5 is generous, 0.6 is strict
+        val personId: String
+
+        if (bestMatch != null && bestSim > threshold) {
+            personId = bestMatch.id
+            val embeddingBytes = floatArrayToByteArray(bestMatch.embedding)
+            personDao.updateEmbedding(bestMatch.id, embeddingBytes, bestMatch.faceCount + 1)
+        } else {
+            // --- NEW: Calculate Normalized Bounds ---
+            // Ensure we don't divide by zero
+            val w = if (imageWidth > 0) imageWidth.toFloat() else 1f
+            val h = if (imageHeight > 0) imageHeight.toFloat() else 1f
+
+            val newPerson = Person(
+                name = "Unknown ${allPeople.size + 1}",
+                embedding = newVector,
+                coverUri = uri,
+                // Save normalized coordinates (0.0 to 1.0)
+                faceLeft = bounds.left / w,
+                faceTop = bounds.top / h,
+                faceRight = bounds.right / w,
+                faceBottom = bounds.bottom / h
+            )
+            personDao.insertPerson(newPerson)
+            personId = newPerson.id
+        }
+
+        personDao.insertImagePersonLink(ImagePersonCrossRef(uri, personId))
+    }
+
+    // --- Update processFaces to pass these bounds ---
+    private suspend fun processFaces(bitmap: Bitmap, uri: String) {
+        try {
+            val inputImage = InputImage.fromBitmap(bitmap, 0)
+            val faces = detectFacesSuspend(inputImage)
+
+            for (face in faces) {
+                val bounds = face.boundingBox
+                // Safety check
+                if (bounds.left < 0 || bounds.top < 0 || bounds.right > bitmap.width || bounds.bottom > bitmap.height) {
+                    continue
+                }
+
+                val faceCrop = Bitmap.createBitmap(bitmap, bounds.left, bounds.top, bounds.width(), bounds.height())
+                val faceVector = faceEncoder.getFaceEmbedding(faceCrop)
+
+                // Pass bounds and dimensions
+                identifyAndLinkPerson(faceVector, uri, bounds, bitmap.width, bitmap.height)
+
+                faceCrop.recycle()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Face processing error", e)
+        }
+    }
+
+    private suspend fun detectFacesSuspend(image: InputImage): List<com.google.mlkit.vision.face.Face> {
+        return suspendCancellableCoroutine { cont ->
+            faceDetector.process(image)
+                .addOnSuccessListener { cont.resume(it) }
+                .addOnFailureListener {
+                    Log.e(TAG, "Face detection failed", it) // --- LOGGING ---
+                    cont.resume(emptyList())
+                }
         }
     }
 

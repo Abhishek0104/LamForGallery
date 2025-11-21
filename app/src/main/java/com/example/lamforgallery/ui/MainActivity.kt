@@ -14,6 +14,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.Face // --- NEW ICON
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.ImageSearch
 import androidx.compose.material.icons.filled.PhotoAlbum
@@ -22,7 +23,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
@@ -45,6 +45,8 @@ class MainActivity : ComponentActivity() {
     private val albumsViewModel: AlbumsViewModel by viewModels { factory }
     private val embeddingViewModel: EmbeddingViewModel by viewModels { factory }
     private val photoViewerViewModel: PhotoViewerViewModel by viewModels { factory }
+    // --- NEW ---
+    private val peopleViewModel: PeopleViewModel by viewModels { factory }
 
     private val permissionToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_IMAGES
@@ -78,7 +80,6 @@ class MainActivity : ComponentActivity() {
             }
         }
         setContent {
-            // Apply Custom Theme Here (assuming standard MaterialTheme for now)
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     if (isPermissionGranted) {
@@ -89,6 +90,7 @@ class MainActivity : ComponentActivity() {
                             albumsViewModel = albumsViewModel,
                             embeddingViewModel = embeddingViewModel,
                             photoViewerViewModel = photoViewerViewModel,
+                            peopleViewModel = peopleViewModel, // --- Pass it ---
                             onLaunchPermissionRequest = { intentSender, type ->
                                 currentPermissionType = type
                                 permissionRequestLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
@@ -125,6 +127,7 @@ fun AppNavigationHost(
     albumsViewModel: AlbumsViewModel,
     embeddingViewModel: EmbeddingViewModel,
     photoViewerViewModel: PhotoViewerViewModel,
+    peopleViewModel: PeopleViewModel, // --- NEW PARAM ---
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit
 ) {
     val navController = rememberNavController()
@@ -137,6 +140,7 @@ fun AppNavigationHost(
                 photosViewModel = photosViewModel,
                 albumsViewModel = albumsViewModel,
                 embeddingViewModel = embeddingViewModel,
+                peopleViewModel = peopleViewModel, // --- Pass it ---
                 selectedTab = selectedTab,
                 onTabSelected = { selectedTab = it },
                 onAlbumClick = { encodedName -> navController.navigate("album_detail/$encodedName") },
@@ -207,6 +211,7 @@ fun AppShell(
     photosViewModel: PhotosViewModel,
     albumsViewModel: AlbumsViewModel,
     embeddingViewModel: EmbeddingViewModel,
+    peopleViewModel: PeopleViewModel, // --- NEW PARAM ---
     selectedTab: String,
     onTabSelected: (String) -> Unit,
     onAlbumClick: (String) -> Unit,
@@ -216,27 +221,27 @@ fun AppShell(
 ) {
     Scaffold(
         bottomBar = {
-            // --- NEW: Glassmorphism Navigation Bar ---
             NavigationBar(
-                // Use a slightly transparent surface color for the glass effect
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                // Optional: Add blur if supported (requires Android 12+ render effect modifier, skipping for simplicity)
             ) {
                 NavigationBarItem(
                     selected = selectedTab == "photos",
                     onClick = { onTabSelected("photos") },
                     icon = { Icon(Icons.Default.Photo, "Photos") },
-                    label = { Text("Photos") },
-                    colors = NavigationBarItemDefaults.colors(
-                        indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
-                        selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
+                    label = { Text("Photos") }
                 )
                 NavigationBarItem(
                     selected = selectedTab == "albums",
                     onClick = { onTabSelected("albums") },
                     icon = { Icon(Icons.Default.PhotoAlbum, "Albums") },
                     label = { Text("Albums") }
+                )
+                // --- NEW PEOPLE TAB ---
+                NavigationBarItem(
+                    selected = selectedTab == "people",
+                    onClick = { onTabSelected("people") },
+                    icon = { Icon(Icons.Default.Face, "People") },
+                    label = { Text("People") }
                 )
                 NavigationBarItem(
                     selected = selectedTab == "agent",
@@ -253,10 +258,6 @@ fun AppShell(
             }
         }
     ) { paddingValues ->
-        // We pass paddingValues down, but for a true "behind the nav bar" effect
-        // on the photos screen, we might want to ignore the bottom padding
-        // and handle it inside the list content padding.
-        // For now, standard behavior is safer to avoid overlap issues.
         Box(modifier = Modifier.padding(paddingValues)) {
             when (selectedTab) {
                 "photos" -> PhotosScreen(
@@ -265,6 +266,7 @@ fun AppShell(
                     onPhotoClick = onPhotoClick
                 )
                 "albums" -> AlbumsScreen(viewModel = albumsViewModel, onAlbumClick = onAlbumClick)
+                "people" -> PeopleScreen(viewModel = peopleViewModel) // --- Show People Screen ---
                 "agent" -> AgentScreen(
                     viewModel = agentViewModel,
                     onLaunchPermissionRequest = onLaunchPermissionRequest,
