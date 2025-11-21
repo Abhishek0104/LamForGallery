@@ -16,7 +16,7 @@ interface PersonDao {
     @Query("SELECT * FROM people")
     suspend fun getAllPeople(): List<Person>
 
-    @Query("SELECT * FROM people WHERE name = :name LIMIT 1")
+    @Query("SELECT * FROM people WHERE name LIKE '%' || :name || '%' LIMIT 1")
     suspend fun getPersonByName(name: String): Person?
 
     @Query("UPDATE people SET name = :newName WHERE id = :personId")
