@@ -19,6 +19,7 @@ import com.example.lamforgallery.ml.TextEncoder
 import com.example.lamforgallery.utils.SimilarityUtil
 import com.example.lamforgallery.utils.CleanupManager
 import com.example.lamforgallery.utils.ImageHelper
+import com.example.lamforgallery.database.PersonDao
 import com.google.gson.Gson
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +71,7 @@ class AgentViewModel(
     private val galleryTools: GalleryTools,
     private val gson: Gson,
     private val imageEmbeddingDao: ImageEmbeddingDao,
+    private val personDao: PersonDao,
     private val clipTokenizer: ClipTokenizer,
     private val textEncoder: TextEncoder,
     private val cleanupManager: CleanupManager
@@ -218,6 +220,36 @@ class AgentViewModel(
                     val startDateStr = toolCall.args["start_date"] as? String
                     val endDateStr = toolCall.args["end_date"] as? String
                     val location = toolCall.args["location"] as? String // <--- NEW
+                    val peopleNames = toolCall.args["people"] as? List<String>
+
+                    var candidateUris: Set<String>? = null
+
+                    // 1. Filter by People (The "Me" Logic)
+                    if (!peopleNames.isNullOrEmpty()) {
+                        val personIds = mutableListOf<String>()
+                        for (name in peopleNames) {
+                            // Handle "me", "my", "myself" mapping
+                            val targetName = if (name.lowercase() in listOf("me", "my", "myself")) "Me" else name
+
+                            // Find person by name (case-insensitive search is better, but exact for now)
+                            val person = personDao.getPersonByName(targetName)
+                            if (person != null) {
+                                personIds.add(person.id)
+                            }
+                        }
+
+                        if (personIds.isNotEmpty()) {
+                            // Get all photos linked to these people
+                            // We need a DAO method for this. See Step 2 below.
+                            val urisWithPeople = personDao.getUrisForPeople(personIds)
+                            candidateUris = urisWithPeople.toSet()
+                        } else {
+                            // People were asked for, but none found -> Return empty result immediately
+                            addMessage(ChatMessage(text = "I couldn't find anyone named ${peopleNames.joinToString()}.", sender = Sender.AGENT))
+                            return mapOf("photos_found" to 0)
+                        }
+                    }
+
 
                     var dateFilterUris: Set<String>? = null
 

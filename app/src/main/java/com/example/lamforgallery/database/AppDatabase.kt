@@ -7,14 +7,15 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
 @Database(
-    entities = [ImageEmbedding::class],
-    version = 3, // <--- BUMPED TO VERSION 3
+    entities = [ImageEmbedding::class, Person::class, ImagePersonCrossRef::class],
+    version = 5, // --- BUMPED TO 5 ---
     exportSchema = false
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
-
+    // ... rest is same ...
     abstract fun imageEmbeddingDao(): ImageEmbeddingDao
+    abstract fun personDao(): PersonDao
 
     companion object {
         @Volatile
@@ -27,7 +28,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "picquery_database"
                 )
-                    .fallbackToDestructiveMigration()
+                    .fallbackToDestructiveMigration() // Wipes DB to handle schema change
                     .build()
                 INSTANCE = instance
                 instance

@@ -1,3 +1,5 @@
+import com.android.build.api.dsl.AaptOptions
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -46,6 +48,15 @@ android {
         }
     }
 
+//    fun AaptOptions.() {
+//        noCompress += "onnx"
+//        noCompress += "ort"
+//    }
+    androidResources {
+        noCompress += "onnx"
+        noCompress += "ort"
+    }
+
 }
 
 dependencies {
@@ -71,6 +82,7 @@ dependencies {
     implementation("androidx.room:room-ktx:$room_version")
     ksp("androidx.room:room-compiler:$room_version")
     implementation("androidx.exifinterface:exifinterface:1.3.6")
+    implementation("com.google.mlkit:face-detection:16.1.6")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
