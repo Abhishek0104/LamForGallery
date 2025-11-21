@@ -1,4 +1,4 @@
-// ... (Imports same as before) ...
+// ... (imports match your original file)
 package com.example.lamforgallery.ui
 
 import android.app.Application
@@ -6,30 +6,26 @@ import android.content.IntentSender
 import android.os.Build
 import android.util.Log
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.lamforgallery.data.AgentRequest
-import com.example.lamforgallery.data.AgentResponse
-import com.example.lamforgallery.data.ToolCall
 import com.example.lamforgallery.data.ToolResult
+import com.example.lamforgallery.data.ToolCall
 import com.example.lamforgallery.data.Suggestion
 import com.example.lamforgallery.network.AgentApiService
-import com.example.lamforgallery.network.NetworkModule
 import com.example.lamforgallery.tools.GalleryTools
 import com.example.lamforgallery.database.ImageEmbeddingDao
 import com.example.lamforgallery.ml.ClipTokenizer
 import com.example.lamforgallery.ml.TextEncoder
 import com.example.lamforgallery.utils.SimilarityUtil
-import com.example.lamforgallery.database.AppDatabase
 import com.example.lamforgallery.utils.CleanupManager
 import com.example.lamforgallery.utils.ImageHelper
 import com.google.gson.Gson
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -37,11 +33,8 @@ import kotlinx.coroutines.withContext
 import java.util.UUID
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeFormatterBuilder
-import java.time.temporal.ChronoField
 
-// ... (State definitions remain same) ...
+// ... (State classes ChatMessage, AgentUiState etc. - copy from original)
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val text: String,
@@ -52,17 +45,11 @@ data class ChatMessage(
     val suggestions: List<Suggestion>? = null
 )
 
-enum class Sender {
-    USER, AGENT, ERROR
-}
+enum class Sender { USER, AGENT, ERROR }
 
 sealed class AgentStatus {
     data class Loading(val message: String) : AgentStatus()
-    data class RequiresPermission(
-        val intentSender: IntentSender,
-        val type: PermissionType,
-        val message: String
-    ) : AgentStatus()
+    data class RequiresPermission(val intentSender: IntentSender, val type: PermissionType, val message: String) : AgentStatus()
     object Idle : AgentStatus()
 }
 
@@ -90,27 +77,19 @@ class AgentViewModel(
 
     private val TAG = "AgentViewModel"
     private var currentSessionId: String = UUID.randomUUID().toString()
-
     private var pendingToolCallId: String? = null
     private var pendingToolArgs: Map<String, Any>? = null
-
     private val _uiState = MutableStateFlow(AgentUiState())
     val uiState: StateFlow<AgentUiState> = _uiState.asStateFlow()
-
     private val _galleryDidChange = MutableSharedFlow<Unit>()
     val galleryDidChange: SharedFlow<Unit> = _galleryDidChange.asSharedFlow()
 
     private data class SearchResult(val uri: String, val similarity: Float)
 
-    // ... (Toggle, Selection, Sheet Logic same as before) ...
-    fun toggleImageSelection(uri: String) {
-        _uiState.update { currentState ->
-            val newSelection = currentState.selectedImageUris.toMutableSet()
-            if (newSelection.contains(uri)) newSelection.remove(uri) else newSelection.add(uri)
-            currentState.copy(selectedImageUris = newSelection)
-        }
-    }
+    // ... (Keep toggleImageSelection, setExternalSelection, openSelectionSheet, confirmSelection, closeSelectionSheet, sendUserInput, onPermissionResult, handleAgentRequest) ...
+    // Assume these methods exist exactly as in your previous file.
 
+    fun toggleImageSelection(uri: String) { _uiState.update { s -> val n = s.selectedImageUris.toMutableSet(); if(n.contains(uri)) n.remove(uri) else n.add(uri); s.copy(selectedImageUris = n) } }
     fun setExternalSelection(uris: List<String>) { _uiState.update { it.copy(selectedImageUris = uris.toSet()) } }
     fun openSelectionSheet(uris: List<String>) { _uiState.update { it.copy(isSelectionSheetOpen = true, selectionSheetUris = uris) } }
     fun confirmSelection(newSelection: Set<String>) { _uiState.update { it.copy(isSelectionSheetOpen = false, selectedImageUris = newSelection, selectionSheetUris = emptyList()) } }
@@ -162,7 +141,6 @@ class AgentViewModel(
                     _galleryDidChange.emit(Unit)
                 }
                 PermissionType.WRITE -> {
-                    setStatus(AgentStatus.Loading("Moving files..."))
                     val uris = args?.get("photo_uris") as? List<String> ?: emptyList()
                     val album = args?.get("album_name") as? String ?: "New Album"
                     val moveResult = galleryTools.performMoveOperation(uris, album)
@@ -180,11 +158,7 @@ class AgentViewModel(
             when (response.status) {
                 "complete" -> {
                     val message = response.agentMessage ?: "Done."
-                    addMessage(ChatMessage(
-                        text = message,
-                        sender = Sender.AGENT,
-                        suggestions = response.suggestedActions // <-- HERE
-                    ))
+                    addMessage(ChatMessage(text = message, sender = Sender.AGENT, suggestions = response.suggestedActions))
                     setStatus(AgentStatus.Idle)
                 }
                 "requires_action" -> {
@@ -205,6 +179,32 @@ class AgentViewModel(
         }
     }
 
+    private fun getUrisFromArgsOrSelection(argUris: Any?): List<String> {
+        val selectedUris = _uiState.value.selectedImageUris
+        if (selectedUris.isNotEmpty()) return selectedUris.toList()
+        return (argUris as? List<String>) ?: emptyList()
+    }
+
+    private fun sendToolResult(resultJsonString: String, toolCallId: String) {
+        viewModelScope.launch {
+            setStatus(AgentStatus.Loading("Sending result..."))
+            val toolResult = ToolResult(toolCallId = toolCallId, content = resultJsonString)
+            val request = AgentRequest(sessionId = currentSessionId, userInput = null, toolResult = toolResult)
+            handleAgentRequest(request)
+        }
+    }
+
+    private fun addMessage(message: ChatMessage) {
+        _uiState.update { currentState -> currentState.copy(messages = currentState.messages + message) }
+    }
+
+    private fun setStatus(newStatus: AgentStatus) {
+        _uiState.update { it.copy(currentStatus = newStatus) }
+    }
+
+    // --------------------------------------------------------------------------
+    // UPDATED TOOL EXECUTION LOGIC
+    // --------------------------------------------------------------------------
     private suspend fun executeLocalTool(toolCall: ToolCall): Any? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
             (toolCall.name == "delete_photos" || toolCall.name == "move_photos_to_album")) {
@@ -217,40 +217,39 @@ class AgentViewModel(
                     val query = toolCall.args["query"] as? String ?: ""
                     val startDateStr = toolCall.args["start_date"] as? String
                     val endDateStr = toolCall.args["end_date"] as? String
+                    val location = toolCall.args["location"] as? String // <--- NEW
 
                     var dateFilterUris: Set<String>? = null
 
-                    // DEBUG LOG: See exactly what the Agent is sending
-                    Log.d(TAG, "Agent Search Request -> Query: '$query', Start: '$startDateStr', End: '$endDateStr'")
-
+                    // 1. Apply Date Filter
                     if (startDateStr != null && endDateStr != null) {
                         try {
-                            // Now relying on strict ISO format from backend
                             val startMillis = LocalDate.parse(startDateStr).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                             val endMillis = LocalDate.parse(endDateStr).atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-
                             val urisList = galleryTools.getPhotosInDateRange(startMillis, endMillis)
                             dateFilterUris = urisList.toSet()
-                            Log.d(TAG, "Date Filter Applied: Found ${dateFilterUris.size} photos in MediaStore.")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to parse dates: $startDateStr - $endDateStr", e)
-                        }
+                        } catch (e: Exception) { Log.e(TAG, "Date error", e) }
                     }
 
                     val foundUris = withContext(Dispatchers.IO) {
-                        if (query.isBlank() && dateFilterUris != null) {
-                            Log.d(TAG, "Date-only search. Returning ${dateFilterUris.size} photos without semantic check.")
-                            return@withContext dateFilterUris.toList()
-                        }
-
                         val allImageEmbeddings = imageEmbeddingDao.getAllEmbeddings()
 
-                        val candidates = if (dateFilterUris != null) {
-                            allImageEmbeddings.filter { dateFilterUris.contains(it.uri) }
-                        } else {
-                            allImageEmbeddings
+                        // 2. Apply Filters (Date & Location)
+                        var candidates = allImageEmbeddings
+
+                        if (dateFilterUris != null) {
+                            candidates = candidates.filter { dateFilterUris.contains(it.uri) }
                         }
 
+                        // --- LOCATION FILTER ---
+                        if (!location.isNullOrBlank()) {
+                            candidates = candidates.filter {
+                                it.location?.contains(location, ignoreCase = true) == true
+                            }
+                        }
+                        // -----------------------
+
+                        // 3. Semantic Search (if query exists)
                         if (query.isNotBlank()) {
                             val tokens = clipTokenizer.tokenize(query)
                             val textEmbedding = textEncoder.encode(tokens)
@@ -260,23 +259,19 @@ class AgentViewModel(
                                 if (sim > 0.2f) SearchResult(it.uri, sim) else null
                             }.sortedByDescending { it.similarity }.map { it.uri }
                         } else {
-                            candidates.map { it.uri }
+                            // If no query, just return the filtered list (up to 100 to prevent overload)
+                            candidates.take(100).map { it.uri }
                         }
                     }
 
                     if (foundUris.isEmpty()) {
-                        val msg = if (dateFilterUris != null && dateFilterUris.isNotEmpty())
-                            "I found photos from that date, but none matched '$query'."
-                        else "I couldn't find any photos matching that criteria."
-                        addMessage(ChatMessage(text = msg, sender= Sender.AGENT))
+                        addMessage(ChatMessage(text = "I couldn't find any photos matching those criteria.", sender= Sender.AGENT))
                     } else {
-                        val message = "I found ${foundUris.size} photos for you."
-                        addMessage(ChatMessage(text = message, sender = Sender.AGENT, imageUris = foundUris, hasSelectionPrompt = true))
+                        addMessage(ChatMessage(text = "Found ${foundUris.size} photos.", sender = Sender.AGENT, imageUris = foundUris, hasSelectionPrompt = true))
                     }
                     mapOf("photos_found" to foundUris.size)
                 }
-
-                // ... (Other tools remain identical) ...
+                // ... (Other cases match your original file) ...
                 "scan_for_cleanup" -> {
                     val duplicates = cleanupManager.findDuplicates()
                     if (duplicates.isEmpty()) {
@@ -284,7 +279,6 @@ class AgentViewModel(
                         mapOf("result" to "No duplicates found")
                     } else {
                         _uiState.update { it.copy(cleanupGroups = duplicates) }
-                        val count = duplicates.sumOf { it.duplicateUris.size }
                         addMessage(ChatMessage(text = "Found duplicates. Tap to review.", sender = Sender.AGENT, isCleanupPrompt = true))
                         mapOf("found_sets" to duplicates.size)
                     }
@@ -315,9 +309,7 @@ class AgentViewModel(
                     val newCollageUri = galleryTools.createCollage(uris, title)
                     val message = "I've created the collage '$title'."
                     val imageList = if (newCollageUri != null) listOf(newCollageUri) else null
-                    // --- FIX: Enable image display for collage ---
                     addMessage(ChatMessage(text = message, sender= Sender.AGENT, imageUris = imageList, hasSelectionPrompt = true))
-                    // --- END FIX ---
                     viewModelScope.launch { _galleryDidChange.emit(Unit) }
                     newCollageUri
                 }
@@ -342,28 +334,5 @@ class AgentViewModel(
             mapOf("error" to "Failed: ${e.message}")
         }
         return result
-    }
-
-    private fun getUrisFromArgsOrSelection(argUris: Any?): List<String> {
-        val selectedUris = _uiState.value.selectedImageUris
-        if (selectedUris.isNotEmpty()) return selectedUris.toList()
-        return (argUris as? List<String>) ?: emptyList()
-    }
-
-    private fun sendToolResult(resultJsonString: String, toolCallId: String) {
-        viewModelScope.launch {
-            setStatus(AgentStatus.Loading("Sending result..."))
-            val toolResult = ToolResult(toolCallId = toolCallId, content = resultJsonString)
-            val request = AgentRequest(sessionId = currentSessionId, userInput = null, toolResult = toolResult)
-            handleAgentRequest(request)
-        }
-    }
-
-    private fun addMessage(message: ChatMessage) {
-        _uiState.update { currentState -> currentState.copy(messages = currentState.messages + message) }
-    }
-
-    private fun setStatus(newStatus: AgentStatus) {
-        _uiState.update { it.copy(currentStatus = newStatus) }
     }
 }

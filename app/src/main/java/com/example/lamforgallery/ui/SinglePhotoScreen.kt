@@ -1,6 +1,8 @@
 package com.example.lamforgallery.ui
 
+import android.location.Geocoder
 import android.net.Uri
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -20,8 +22,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.exifinterface.media.ExifInterface
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 
 /**
  * A cleaner fullscreen photo viewer.
@@ -37,6 +43,7 @@ fun SinglePhotoScreen(
     onAgentAction: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope() // <--- Needed for Geocoder background work
     val photoUri = try {
         URLDecoder.decode(photoUriEncoded, StandardCharsets.UTF_8.name())
     } catch (e: Exception) { photoUriEncoded }
@@ -44,34 +51,75 @@ fun SinglePhotoScreen(
     // State for local metadata display
     var showInfoDialog by remember { mutableStateOf(false) }
     var metadataText by remember { mutableStateOf("") }
+    var isLoadingMetadata by remember { mutableStateOf(false) } // <--- UX State
 
     // Function to read EXIF data locally
     fun readMetadata() {
-        try {
-            val uri = Uri.parse(photoUri)
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                val exif = ExifInterface(inputStream)
-                val date = exif.getAttribute(ExifInterface.TAG_DATETIME) ?: "Unknown Date"
-                val make = exif.getAttribute(ExifInterface.TAG_MAKE) ?: ""
-                val model = exif.getAttribute(ExifInterface.TAG_MODEL) ?: "Unknown Camera"
-                val lat = exif.getAttribute(ExifInterface.TAG_GPS_LATITUDE)
-                val long = exif.getAttribute(ExifInterface.TAG_GPS_LONGITUDE)
-                val width = exif.getAttribute(ExifInterface.TAG_IMAGE_WIDTH) ?: "-"
-                val height = exif.getAttribute(ExifInterface.TAG_IMAGE_LENGTH) ?: "-"
+        scope.launch { // <--- Launch in coroutine
+            isLoadingMetadata = true
+            showInfoDialog = true // Show dialog immediately with loading state
+            metadataText = "Loading details..."
 
-                val sb = StringBuilder()
-                sb.append("Date: $date\n")
-                sb.append("Device: $make $model\n")
-                sb.append("Resolution: ${width}x${height}\n")
-                if (lat != null && long != null) {
-                    sb.append("Location: $lat, $long")
+            val info = withContext(Dispatchers.IO) {
+                try {
+                    val uri = Uri.parse(photoUri)
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        val exif = ExifInterface(inputStream)
+                        val date = exif.getAttribute(ExifInterface.TAG_DATETIME) ?: "Unknown Date"
+                        val make = exif.getAttribute(ExifInterface.TAG_MAKE) ?: ""
+                        val model = exif.getAttribute(ExifInterface.TAG_MODEL) ?: "Unknown Camera"
+                        val width = exif.getAttribute(ExifInterface.TAG_IMAGE_WIDTH) ?: "-"
+                        val height = exif.getAttribute(ExifInterface.TAG_IMAGE_LENGTH) ?: "-"
+
+                        // --- NEW: Get Lat/Long and Reverse Geocode ---
+                        var locationString = "No Location Data"
+                        val latLong = exif.latLong
+                        if (latLong != null) {
+                            val (lat, lon) = latLong
+                            locationString = try {
+                                val geocoder = Geocoder(context, Locale.getDefault())
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    // For simple synchronous blocking in this IO block, we use the deprecated one
+                                    // or we could use the listener.
+                                    // Since we are already in Dispatchers.IO, this blocking call is safe and easiest.
+                                    @Suppress("DEPRECATION")
+                                    val addresses = geocoder.getFromLocation(lat, lon, 1)
+                                    val address = addresses?.firstOrNull()
+                                    if (address != null) {
+                                        val city = address.locality ?: address.subAdminArea
+                                        val country = address.countryName
+                                        "$city, $country"
+                                    } else "$lat, $lon"
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    val addresses = geocoder.getFromLocation(lat, lon, 1)
+                                    val address = addresses?.firstOrNull()
+                                    if (address != null) {
+                                        val city = address.locality ?: address.subAdminArea
+                                        val country = address.countryName
+                                        "$city, $country"
+                                    } else "$lat, $lon"
+                                }
+                            } catch (e: Exception) {
+                                "$lat, $lon (Geocoding failed)"
+                            }
+                        }
+                        // ---------------------------------------------
+
+                        val sb = StringBuilder()
+                        sb.append("Date: $date\n")
+                        sb.append("Location: $locationString\n") // <--- Added Line
+                        sb.append("Device: $make $model\n")
+                        sb.append("Resolution: ${width}x${height}")
+                        sb.toString()
+                    } ?: "Could not access file."
+                } catch (e: Exception) {
+                    "Could not read metadata: ${e.message}"
                 }
-                metadataText = sb.toString()
             }
-        } catch (e: Exception) {
-            metadataText = "Could not read metadata: ${e.message}"
+            metadataText = info
+            isLoadingMetadata = false
         }
-        showInfoDialog = true
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -88,7 +136,7 @@ fun SinglePhotoScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .statusBarsPadding() // <--- FIX: Ensures button isn't covered by status bar
+                .statusBarsPadding()
                 .padding(16.dp)
                 .align(Alignment.TopStart),
             verticalAlignment = Alignment.CenterVertically
@@ -108,7 +156,6 @@ fun SinglePhotoScreen(
                 .padding(bottom = 40.dp, start = 16.dp, end = 16.dp)
                 .fillMaxWidth()
         ) {
-            // Just the card, no microphone button
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.7f)),
                 shape = RoundedCornerShape(24.dp),
@@ -120,19 +167,16 @@ fun SinglePhotoScreen(
                         .padding(16.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    // INFO: Reads local EXIF
                     OverlayActionButton(
                         icon = Icons.Default.Info,
                         label = "Info",
                         onClick = { readMetadata() }
                     )
-                    // EDIT: Calls Agent
                     OverlayActionButton(
                         icon = Icons.Default.Edit,
                         label = "Edit",
                         onClick = { onAgentAction("I want to edit this photo") }
                     )
-                    // SIMILAR: Calls Agent
                     OverlayActionButton(
                         icon = Icons.Default.AutoAwesome,
                         label = "Similar",
@@ -152,7 +196,13 @@ fun SinglePhotoScreen(
                     }
                 },
                 title = { Text("Image Details") },
-                text = { Text(metadataText) }
+                text = {
+                    if (isLoadingMetadata) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    } else {
+                        Text(metadataText)
+                    }
+                }
             )
         }
     }

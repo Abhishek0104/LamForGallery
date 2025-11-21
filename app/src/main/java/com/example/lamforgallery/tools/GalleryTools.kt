@@ -1,35 +1,126 @@
 package com.example.lamforgallery.tools
 
+import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.ContentValues
+import android.content.Context
 import android.content.IntentSender
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.ImageDecoder // --- NEW IMPORT ---
+import android.graphics.ImageDecoder
 import android.graphics.Rect
+import android.location.Geocoder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
-import android.util.Size
 import androidx.annotation.RequiresApi
-import com.example.lamforgallery.ui.PermissionType
+import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.OutputStream
-import android.content.ContentResolver
-import androidx.exifinterface.media.ExifInterface
+import java.util.Locale
 import kotlin.math.ceil
-import kotlin.math.sqrt
 
-class GalleryTools(private val resolver: ContentResolver) {
+class GalleryTools(private val context: Context) {
 
+    private val resolver: ContentResolver = context.contentResolver
     private val TAG = "GalleryTools"
 
-    // ... (searchPhotos, getPhotosInDateRange, IntentSenders, Move functions REMAIN THE SAME) ...
+    // --- NEW: Unified Data Class ---
+    data class ImageInfo(
+        val location: String? = null,
+        val dateTaken: Long = 0L,
+        val width: Int = 0,
+        val height: Int = 0,
+        val cameraModel: String? = null
+    )
 
-    // (Including searchPhotos for context)
+    /**
+     * Extracts ALL metadata (Location, Date, Dims, Camera) in one go.
+     */
+    suspend fun extractImageInfo(uriString: String): ImageInfo {
+        return withContext(Dispatchers.IO) {
+            try {
+                resolver.openInputStream(Uri.parse(uriString))?.use { inputStream ->
+                    val exif = ExifInterface(inputStream)
+
+                    // 1. Location
+                    var location: String? = null
+                    val latLong = exif.latLong
+                    if (latLong != null) {
+                        location = reverseGeocode(latLong[0], latLong[1])
+                    }
+
+                    // 2. Date
+                    // Try standard DATE_TAKEN tag, fallback to file modified if needed (simplified here)
+                    val dateString = exif.getAttribute(ExifInterface.TAG_DATETIME)
+                    // Parsing date string manually is complex, so often relying on MediaStore
+                    // query is safer for date, but let's grab simple width/height/model here.
+                    // Note: For robust Date, we usually query MediaStore columns.
+                    // But let's get what we can from Exif for now.
+                    val dateTaken = parseExifDate(dateString)
+
+                    // 3. Dimensions
+                    val width = exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
+                    val height = exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0)
+
+                    // 4. Camera
+                    val make = exif.getAttribute(ExifInterface.TAG_MAKE) ?: ""
+                    val model = exif.getAttribute(ExifInterface.TAG_MODEL) ?: ""
+                    val cameraModel = if (make.isNotBlank() || model.isNotBlank()) "$make $model".trim() else null
+
+                    return@withContext ImageInfo(location, dateTaken, width, height, cameraModel)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error reading metadata for $uriString", e)
+            }
+            ImageInfo() // Return empty if failed
+        }
+    }
+
+    private fun parseExifDate(dateString: String?): Long {
+        if (dateString == null) return System.currentTimeMillis()
+        // Exif format is usually "yyyy:MM:dd HH:mm:ss"
+        return try {
+            val sdf = java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+            sdf.parse(dateString)?.time ?: System.currentTimeMillis()
+        } catch (e: Exception) {
+            System.currentTimeMillis()
+        }
+    }
+
+    // --- HELPER: Reverse Geocoding (Same as before) ---
+    private fun reverseGeocode(lat: Double, lon: Double): String? {
+        return try {
+            val geocoder = Geocoder(context, Locale.getDefault())
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val addresses = geocoder.getFromLocation(lat, lon, 1)
+                formatAddress(addresses?.firstOrNull())
+            } else {
+                @Suppress("DEPRECATION")
+                val addresses = geocoder.getFromLocation(lat, lon, 1)
+                formatAddress(addresses?.firstOrNull())
+            }
+        } catch (e: Exception) { null }
+    }
+
+    private fun formatAddress(address: android.location.Address?): String? {
+        if (address == null) return null
+        val city = address.locality ?: address.subAdminArea
+        val country = address.countryName
+        return when {
+            city != null && country != null -> "$city, $country"
+            city != null -> city
+            country != null -> country
+            else -> null
+        }
+    }
+
+    // --- EXISTING METHODS (Search, Filter, Collage, etc.) ---
+    // (Keep the rest of your file exactly as it was in the previous step,
+    //  including the fixed createCollage method)
+
     suspend fun searchPhotos(query: String): List<String> {
         val photoUris = mutableListOf<String>()
         val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -96,19 +187,16 @@ class GalleryTools(private val resolver: ContentResolver) {
         }
     }
 
-    // --- UPDATED BITMAP LOADING FOR FILTERS & COLLAGE ---
     private fun loadBitmapFromUri(uriString: String): Bitmap? {
         return try {
             val uri = Uri.parse(uriString)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                // Use modern ImageDecoder (Hardware accelerated, handles rotation automatically)
                 val source = ImageDecoder.createSource(resolver, uri)
                 ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                    decoder.isMutableRequired = true // We need mutable to edit
-                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE // Software is safer for canvas ops
+                    decoder.isMutableRequired = true
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
                 }
             } else {
-                // Fallback for older versions
                 @Suppress("DEPRECATION")
                 MediaStore.Images.Media.getBitmap(resolver, uri)
             }
@@ -129,22 +217,14 @@ class GalleryTools(private val resolver: ContentResolver) {
             val newImageUris = mutableListOf<String>()
             for (uriString in photoUris) {
                 val originalBitmap = loadBitmapFromUri(uriString)
-                if (originalBitmap == null) {
-                    Log.e(TAG, "Could not load bitmap for $uriString")
-                    continue
-                }
+                if (originalBitmap == null) continue
 
                 try {
                     val filteredBitmap = applyColorFilter(originalBitmap, filter)
                     val originalName = getFileName(uriString) ?: "filtered_image"
                     val newTitle = "${originalName}_${filterName}_${System.currentTimeMillis()}"
-
-                    // Save to "Pictures/Filters"
                     val newUri = saveBitmapToMediaStore(filteredBitmap, newTitle, "Pictures/Filters")
                     newImageUris.add(newUri.toString())
-                    Log.d(TAG, "Saved filtered image: $newUri")
-
-                    // Clean up
                     originalBitmap.recycle()
                     filteredBitmap.recycle()
                 } catch (e: Exception) {
@@ -154,9 +234,6 @@ class GalleryTools(private val resolver: ContentResolver) {
             newImageUris
         }
     }
-
-    // ... (createCollage, getPhotoMetadata, getAlbums, getPhotos, getPhotosForAlbum REMAIN THE SAME) ...
-    // (Assume the rest of the file is here as provided previously)
 
     suspend fun createCollage(photoUris: List<String>, title: String): String? {
         if (photoUris.isEmpty()) throw Exception("No photos provided.")
