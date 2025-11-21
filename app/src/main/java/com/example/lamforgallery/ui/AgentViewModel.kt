@@ -335,4 +335,18 @@ class AgentViewModel(
         }
         return result
     }
+
+    fun clearChat() {
+        // Reset messages to empty, reset session ID to start fresh context
+        currentSessionId = UUID.randomUUID().toString()
+        _uiState.update {
+            it.copy(
+                messages = emptyList(),
+                currentStatus = AgentStatus.Idle,
+                // Optionally clear selection too if desired
+                selectedImageUris = emptySet(),
+                cleanupGroups = emptyList()
+            )
+        }
+    }
 }

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteSweep // --- NEW ICON
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material3.*
@@ -79,7 +80,6 @@ fun AgentScreen(
 
     Scaffold(
         topBar = {
-            // --- NEW: Glassmorphism Header ---
             TopAppBar(
                 title = {
                     Text(
@@ -88,13 +88,22 @@ fun AgentScreen(
                         style = MaterialTheme.typography.titleLarge
                     )
                 },
+                actions = {
+                    // --- NEW: Clear Chat Button ---
+                    IconButton(onClick = { viewModel.clearChat() }) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteSweep,
+                            contentDescription = "Clear Chat",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
                 )
             )
         },
         bottomBar = {
-            // --- NEW: Premium Chat Input ---
             ChatInputBar(
                 status = uiState.currentStatus,
                 selectionCount = uiState.selectedImageUris.size,
@@ -110,13 +119,12 @@ fun AgentScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.Bottom
         ) {
-            // --- NEW: Helpful Empty State ---
             if (uiState.messages.isEmpty()) {
                 item {
                     Column(
                         modifier = Modifier
                             .fillParentMaxSize()
-                            .padding(bottom = 100.dp), // Push up slightly to avoid keyboard overlap area
+                            .padding(bottom = 100.dp),
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
@@ -171,6 +179,7 @@ fun AgentScreen(
     }
 }
 
+// ... (ChatMessageItem, MediaGridPreview, etc. remain exactly the same as before)
 @Composable
 fun ChatMessageItem(
     message: ChatMessage,
@@ -181,7 +190,6 @@ fun ChatMessageItem(
     val isUser = message.sender == Sender.USER
     val horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
 
-    // Updated Colors for "Premium" feel
     val backgroundColor = when (message.sender) {
         Sender.USER -> MaterialTheme.colorScheme.primary
         Sender.AGENT -> MaterialTheme.colorScheme.surfaceVariant
@@ -397,13 +405,11 @@ fun SelectablePhotoItem(uri: String, isSelected: Boolean, onToggle: () -> Unit) 
     }
 }
 
-// --- NEW: Floating Pill Input Bar ---
 @Composable
 fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> Unit) {
     var inputText by remember { mutableStateOf("") }
     val isEnabled = status is AgentStatus.Idle
 
-    // Using Surface for elevation and background
     Surface(
         tonalElevation = 2.dp,
         shadowElevation = 8.dp,
@@ -412,7 +418,6 @@ fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> U
     ) {
         Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp)) {
 
-            // 1. Context Indicator (if images selected)
             if (selectionCount > 0) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -431,7 +436,6 @@ fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> U
                 }
             }
 
-            // 2. Status Indicator (Loading/Permission)
             if (status !is AgentStatus.Idle) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -447,7 +451,6 @@ fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> U
                 }
             }
 
-            // 3. The Floating Pill Input
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -474,7 +477,6 @@ fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> U
                     enabled = isEnabled
                 )
 
-                // Send Button
                 IconButton(
                     onClick = { onSend(inputText); inputText = "" },
                     enabled = isEnabled && (inputText.isNotBlank() || selectionCount > 0),
