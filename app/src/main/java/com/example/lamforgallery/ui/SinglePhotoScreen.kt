@@ -3,8 +3,11 @@ package com.example.lamforgallery.ui
 import android.location.Geocoder
 import android.net.Uri
 import android.os.Build
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -25,44 +28,49 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 /**
- * A cleaner fullscreen photo viewer.
- * - "Info" fetches metadata locally (no AI).
- * - "Edit" and "Similar" still prompt the Agent.
- * - Removed Microphone button.
- * - Fixed Back button layout (added statusBarsPadding).
+ * A swipable full-screen photo viewer.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SinglePhotoScreen(
-    photoUriEncoded: String,
+    viewModel: PhotoViewerViewModel,
     onNavigateBack: () -> Unit,
-    onAgentAction: (String) -> Unit
+    onAgentAction: (String, String) -> Unit // pass prompt AND uri
 ) {
+    val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
-    val scope = rememberCoroutineScope() // <--- Needed for Geocoder background work
-    val photoUri = try {
-        URLDecoder.decode(photoUriEncoded, StandardCharsets.UTF_8.name())
-    } catch (e: Exception) { photoUriEncoded }
+    val scope = rememberCoroutineScope()
 
-    // State for local metadata display
+    // If no photos, back out (shouldn't happen)
+    if (uiState.photos.isEmpty()) {
+        LaunchedEffect(Unit) { onNavigateBack() }
+        return
+    }
+
+    // Pager State (Starts at the clicked photo)
+    val pagerState = rememberPagerState(
+        initialPage = uiState.initialIndex,
+        pageCount = { uiState.photos.size }
+    )
+
+    // State for metadata dialog
     var showInfoDialog by remember { mutableStateOf(false) }
     var metadataText by remember { mutableStateOf("") }
-    var isLoadingMetadata by remember { mutableStateOf(false) } // <--- UX State
+    var isLoadingMetadata by remember { mutableStateOf(false) }
 
-    // Function to read EXIF data locally
-    fun readMetadata() {
-        scope.launch { // <--- Launch in coroutine
+    // Helper to read metadata for the CURRENT page
+    fun readMetadata(currentUriString: String) {
+        scope.launch {
             isLoadingMetadata = true
-            showInfoDialog = true // Show dialog immediately with loading state
+            showInfoDialog = true
             metadataText = "Loading details..."
 
             val info = withContext(Dispatchers.IO) {
                 try {
-                    val uri = Uri.parse(photoUri)
+                    val uri = Uri.parse(currentUriString)
                     context.contentResolver.openInputStream(uri)?.use { inputStream ->
                         val exif = ExifInterface(inputStream)
                         val date = exif.getAttribute(ExifInterface.TAG_DATETIME) ?: "Unknown Date"
@@ -71,7 +79,6 @@ fun SinglePhotoScreen(
                         val width = exif.getAttribute(ExifInterface.TAG_IMAGE_WIDTH) ?: "-"
                         val height = exif.getAttribute(ExifInterface.TAG_IMAGE_LENGTH) ?: "-"
 
-                        // --- NEW: Get Lat/Long and Reverse Geocode ---
                         var locationString = "No Location Data"
                         val latLong = exif.latLong
                         if (latLong != null) {
@@ -79,9 +86,6 @@ fun SinglePhotoScreen(
                             locationString = try {
                                 val geocoder = Geocoder(context, Locale.getDefault())
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    // For simple synchronous blocking in this IO block, we use the deprecated one
-                                    // or we could use the listener.
-                                    // Since we are already in Dispatchers.IO, this blocking call is safe and easiest.
                                     @Suppress("DEPRECATION")
                                     val addresses = geocoder.getFromLocation(lat, lon, 1)
                                     val address = addresses?.firstOrNull()
@@ -100,22 +104,17 @@ fun SinglePhotoScreen(
                                         "$city, $country"
                                     } else "$lat, $lon"
                                 }
-                            } catch (e: Exception) {
-                                "$lat, $lon (Geocoding failed)"
-                            }
+                            } catch (e: Exception) { "$lat, $lon" }
                         }
-                        // ---------------------------------------------
 
                         val sb = StringBuilder()
                         sb.append("Date: $date\n")
-                        sb.append("Location: $locationString\n") // <--- Added Line
+                        sb.append("Location: $locationString\n")
                         sb.append("Device: $make $model\n")
                         sb.append("Resolution: ${width}x${height}")
                         sb.toString()
                     } ?: "Could not access file."
-                } catch (e: Exception) {
-                    "Could not read metadata: ${e.message}"
-                }
+                } catch (e: Exception) { "Error: ${e.message}" }
             }
             metadataText = info
             isLoadingMetadata = false
@@ -123,16 +122,21 @@ fun SinglePhotoScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // 1. Horizontal Pager for Swiping
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            val photoUri = uiState.photos[page]
+            AsyncImage(
+                model = photoUri,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
-        // 1. The Full Screen Image
-        AsyncImage(
-            model = photoUri,
-            contentDescription = "Full photo",
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize().align(Alignment.Center)
-        )
-
-        // 2. Top Bar (Transparent) with Status Bar Padding
+        // 2. Top Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -147,9 +151,19 @@ fun SinglePhotoScreen(
             ) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
+            Spacer(Modifier.weight(1f))
+            // Page Indicator (e.g., "5 / 100")
+            Text(
+                text = "${pagerState.currentPage + 1} / ${uiState.photos.size}",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
         }
 
-        // 3. The Action Overlay (Bottom)
+        // 3. Bottom Actions
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -162,46 +176,33 @@ fun SinglePhotoScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    OverlayActionButton(
-                        icon = Icons.Default.Info,
-                        label = "Info",
-                        onClick = { readMetadata() }
-                    )
-                    OverlayActionButton(
-                        icon = Icons.Default.Edit,
-                        label = "Edit",
-                        onClick = { onAgentAction("I want to edit this photo") }
-                    )
-                    OverlayActionButton(
-                        icon = Icons.Default.AutoAwesome,
-                        label = "Similar",
-                        onClick = { onAgentAction("Find similar photos to this") }
-                    )
+                    val currentUri = uiState.photos.getOrNull(pagerState.currentPage) ?: ""
+
+                    OverlayActionButton(Icons.Default.Info, "Info") {
+                        readMetadata(currentUri)
+                    }
+                    OverlayActionButton(Icons.Default.Edit, "Edit") {
+                        onAgentAction("I want to edit this photo", currentUri)
+                    }
+                    OverlayActionButton(Icons.Default.AutoAwesome, "Similar") {
+                        onAgentAction("Find similar photos to this", currentUri)
+                    }
                 }
             }
         }
 
-        // 4. Local Metadata Dialog
+        // 4. Metadata Dialog
         if (showInfoDialog) {
             AlertDialog(
                 onDismissRequest = { showInfoDialog = false },
-                confirmButton = {
-                    TextButton(onClick = { showInfoDialog = false }) {
-                        Text("Close")
-                    }
-                },
+                confirmButton = { TextButton(onClick = { showInfoDialog = false }) { Text("Close") } },
                 title = { Text("Image Details") },
                 text = {
-                    if (isLoadingMetadata) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                    } else {
-                        Text(metadataText)
-                    }
+                    if (isLoadingMetadata) CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    else Text(metadataText)
                 }
             )
         }
@@ -217,17 +218,11 @@ fun OverlayActionButton(
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         IconButton(
             onClick = onClick,
-            modifier = Modifier
-                .size(48.dp)
-                .background(Color.White.copy(alpha = 0.15f), CircleShape)
+            modifier = Modifier.size(48.dp).background(Color.White.copy(alpha = 0.15f), CircleShape)
         ) {
             Icon(icon, contentDescription = label, tint = Color.White)
         }
         Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = label,
-            color = Color.White.copy(alpha = 0.9f),
-            style = MaterialTheme.typography.labelSmall
-        )
+        Text(text = label, color = Color.White.copy(alpha = 0.9f), style = MaterialTheme.typography.labelSmall)
     }
 }

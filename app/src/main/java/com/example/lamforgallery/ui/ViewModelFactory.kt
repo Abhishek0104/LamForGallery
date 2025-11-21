@@ -19,7 +19,6 @@ class ViewModelFactory(
 ) : ViewModelProvider.Factory {
 
     private val gson: Gson by lazy { NetworkModule.gson }
-    // CHANGED: Pass application context instead of just contentResolver
     private val galleryTools: GalleryTools by lazy { GalleryTools(application) }
     private val agentApi: AgentApiService by lazy { NetworkModule.apiService }
     private val appDatabase: AppDatabase by lazy { AppDatabase.getDatabase(application) }
@@ -43,6 +42,8 @@ class ViewModelFactory(
             modelClass.isAssignableFrom(AlbumsViewModel::class.java) -> AlbumsViewModel(galleryTools) as T
             modelClass.isAssignableFrom(AlbumDetailViewModel::class.java) -> AlbumDetailViewModel(galleryTools) as T
             modelClass.isAssignableFrom(EmbeddingViewModel::class.java) -> EmbeddingViewModel(application, imageEmbeddingDao, imageEncoder, galleryTools) as T
+            // --- THIS WAS MISSING OR NOT SAVED ---
+            modelClass.isAssignableFrom(PhotoViewerViewModel::class.java) -> PhotoViewerViewModel() as T
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }
     }

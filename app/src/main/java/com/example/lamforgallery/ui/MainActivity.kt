@@ -1,4 +1,3 @@
-// ... (Imports same as before) ...
 package com.example.lamforgallery.ui
 
 import android.Manifest
@@ -7,7 +6,6 @@ import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
@@ -32,21 +30,19 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import kotlinx.coroutines.launch
-import com.example.lamforgallery.ui.EmbeddingScreen
-import com.example.lamforgallery.ui.EmbeddingViewModel
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 class MainActivity : ComponentActivity() {
-    // ... (MainActivity Code same as previous uploads) ...
-    // ... (Just omitting the boilerplate for brevity, assume standard setup) ...
-    private val TAG = "MainActivity"
+
     private val factory by lazy { ViewModelFactory(application) }
 
     private val agentViewModel: AgentViewModel by viewModels { factory }
     private val photosViewModel: PhotosViewModel by viewModels { factory }
     private val albumsViewModel: AlbumsViewModel by viewModels { factory }
     private val embeddingViewModel: EmbeddingViewModel by viewModels { factory }
+    // --- NEW VM ---
+    private val photoViewerViewModel: PhotoViewerViewModel by viewModels { factory }
 
     private val permissionToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_IMAGES
@@ -54,22 +50,21 @@ class MainActivity : ComponentActivity() {
         Manifest.permission.READ_EXTERNAL_STORAGE
     }
     private var isPermissionGranted by mutableStateOf(false)
-    private val requestPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-            isPermissionGranted = isGranted
-            if (isGranted) loadAllViewModels()
-        }
+
+    private val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        isPermissionGranted = isGranted
+        if (isGranted) loadAllViewModels()
+    }
 
     private var currentPermissionType: PermissionType? = null
-    private val permissionRequestLauncher =
-        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { activityResult ->
-            val type = currentPermissionType
-            if (type != null) {
-                val wasSuccessful = activityResult.resultCode == RESULT_OK
-                agentViewModel.onPermissionResult(wasSuccessful, type)
-                currentPermissionType = null
-            }
+    private val permissionRequestLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { activityResult ->
+        val type = currentPermissionType
+        if (type != null) {
+            val wasSuccessful = activityResult.resultCode == RESULT_OK
+            agentViewModel.onPermissionResult(wasSuccessful, type)
+            currentPermissionType = null
         }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,6 +85,7 @@ class MainActivity : ComponentActivity() {
                             photosViewModel = photosViewModel,
                             albumsViewModel = albumsViewModel,
                             embeddingViewModel = embeddingViewModel,
+                            photoViewerViewModel = photoViewerViewModel, // Pass it down
                             onLaunchPermissionRequest = { intentSender, type ->
                                 currentPermissionType = type
                                 permissionRequestLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
@@ -125,6 +121,7 @@ fun AppNavigationHost(
     photosViewModel: PhotosViewModel,
     albumsViewModel: AlbumsViewModel,
     embeddingViewModel: EmbeddingViewModel,
+    photoViewerViewModel: PhotoViewerViewModel, // New parameter
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit
 ) {
     val navController = rememberNavController()
@@ -141,47 +138,62 @@ fun AppNavigationHost(
                 onTabSelected = { selectedTab = it },
                 onAlbumClick = { encodedName -> navController.navigate("album_detail/$encodedName") },
                 onLaunchPermissionRequest = onLaunchPermissionRequest,
-                onPhotoClick = { encodedUri -> navController.navigate("view_photo/$encodedUri") },
-                // --- NEW CALLBACK for Cleanup Navigation ---
+                onPhotoClick = { encodedUri ->
+                    // --- LOGIC CHANGE: Set the playlist before navigating ---
+                    val currentList = photosViewModel.uiState.value.photos
+                    val uri = try {
+                        java.net.URLDecoder.decode(encodedUri, "UTF-8")
+                    } catch(e:Exception) { encodedUri }
+
+                    photoViewerViewModel.setPhotoList(currentList, uri)
+                    // We still pass URI for route uniqueness/deep-linking logic,
+                    // but SinglePhotoScreen will use the VM
+                    navController.navigate("view_photo")
+                },
                 onNavigateToCleanup = { navController.navigate("cleanup_review") }
             )
         }
+
         composable(
             route = "album_detail/{albumName}",
             arguments = listOf(navArgument("albumName") { type = NavType.StringType })
         ) { backStackEntry ->
             val albumName = backStackEntry.arguments?.getString("albumName") ?: "Unknown"
             val albumDetailViewModel: AlbumDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
-            AlbumDetailScreen(albumName = albumName, viewModel = albumDetailViewModel, onNavigateBack = { navController.popBackStack() })
-        }
-        composable(
-            route = "view_photo/{photoUri}",
-            arguments = listOf(navArgument("photoUri") { type = NavType.StringType })
-        ) { backStackEntry ->
-            val photoUri = backStackEntry.arguments?.getString("photoUri") ?: ""
-            SinglePhotoScreen(
-                photoUriEncoded = photoUri,
+            AlbumDetailScreen(
+                albumName = albumName,
+                viewModel = albumDetailViewModel,
                 onNavigateBack = { navController.popBackStack() },
-                onAgentAction = { prompt ->
-                    val decodedUri = java.net.URLDecoder.decode(photoUri, java.nio.charset.StandardCharsets.UTF_8.name())
-                    agentViewModel.setExternalSelection(listOf(decodedUri))
+                onPhotoClick = { uri ->
+                    // Also allow swiping from Album View
+                    val currentList = albumDetailViewModel.uiState.value.photos
+                    photoViewerViewModel.setPhotoList(currentList, uri)
+                    navController.navigate("view_photo")
+                }
+            )
+        }
+
+        // --- CHANGED: Removed URI arg from route, data comes from VM ---
+        composable("view_photo") {
+            SinglePhotoScreen(
+                viewModel = photoViewerViewModel,
+                onNavigateBack = { navController.popBackStack() },
+                onAgentAction = { prompt, uri ->
+                    agentViewModel.setExternalSelection(listOf(uri))
                     navController.popBackStack("main", inclusive = false)
                     selectedTab = "agent"
                     agentViewModel.sendUserInput(prompt)
                 }
             )
         }
-        // --- NEW ROUTE: Cleanup Screen ---
+
         composable("cleanup_review") {
             val uiState by agentViewModel.uiState.collectAsState()
             CleanupScreen(
                 duplicateGroups = uiState.cleanupGroups,
                 onNavigateBack = { navController.popBackStack() },
                 onConfirmDelete = { urisToDelete ->
-                    // Go back to Agent tab and tell the agent to delete them
                     navController.popBackStack()
-                    // We synthesize a user command so the agent uses its normal 'delete_photos' tool flow
-                    // This is safer than doing it manually because it handles permissions & UI state.
                     agentViewModel.setExternalSelection(urisToDelete)
                     agentViewModel.sendUserInput("Delete these duplicates")
                 }
@@ -202,21 +214,15 @@ fun AppShell(
     onAlbumClick: (String) -> Unit,
     onPhotoClick: (String) -> Unit,
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit,
-    onNavigateToCleanup: () -> Unit // --- NEW PARAMETER ---
+    onNavigateToCleanup: () -> Unit
 ) {
-    // Check for cleanup prompt
-    val uiState by agentViewModel.uiState.collectAsState()
-
-    // If the last message was a cleanup result, we can show a "Review" button overlay or rely on a custom Chat Item
-    // But for now, let's modify AgentScreen to accept this callback.
-
     Scaffold(
         bottomBar = {
             NavigationBar {
-                NavigationBarItem(selected = selectedTab == "photos", onClick = { onTabSelected("photos") }, icon = { Icon(Icons.Default.Photo, contentDescription = "Photos") }, label = { Text("Photos") })
-                NavigationBarItem(selected = selectedTab == "albums", onClick = { onTabSelected("albums") }, icon = { Icon(Icons.Default.PhotoAlbum, contentDescription = "Albums") }, label = { Text("Albums") })
-                NavigationBarItem(selected = selectedTab == "agent", onClick = { onTabSelected("agent") }, icon = { Icon(Icons.Default.ChatBubble, contentDescription = "Agent") }, label = { Text("Agent") })
-                NavigationBarItem(selected = selectedTab == "indexing", onClick = { onTabSelected("indexing") }, icon = { Icon(Icons.Default.ImageSearch, contentDescription = "Indexing") }, label = { Text("Indexing") })
+                NavigationBarItem(selected = selectedTab == "photos", onClick = { onTabSelected("photos") }, icon = { Icon(Icons.Default.Photo, "Photos") }, label = { Text("Photos") })
+                NavigationBarItem(selected = selectedTab == "albums", onClick = { onTabSelected("albums") }, icon = { Icon(Icons.Default.PhotoAlbum, "Albums") }, label = { Text("Albums") })
+                NavigationBarItem(selected = selectedTab == "agent", onClick = { onTabSelected("agent") }, icon = { Icon(Icons.Default.ChatBubble, "Agent") }, label = { Text("Agent") })
+                NavigationBarItem(selected = selectedTab == "indexing", onClick = { onTabSelected("indexing") }, icon = { Icon(Icons.Default.ImageSearch, "Indexing") }, label = { Text("Indexing") })
             }
         }
     ) { paddingValues ->
@@ -231,7 +237,7 @@ fun AppShell(
                 "agent" -> AgentScreen(
                     viewModel = agentViewModel,
                     onLaunchPermissionRequest = onLaunchPermissionRequest,
-                    onNavigateToCleanup = onNavigateToCleanup // --- PASS IT HERE ---
+                    onNavigateToCleanup = onNavigateToCleanup
                 )
                 "indexing" -> EmbeddingScreen(viewModel = embeddingViewModel)
             }
