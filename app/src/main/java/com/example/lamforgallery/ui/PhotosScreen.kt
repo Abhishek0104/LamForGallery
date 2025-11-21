@@ -6,10 +6,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid // --- NEW
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells // --- NEW
+import androidx.compose.foundation.lazy.staggeredgrid.items // --- NEW
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState // --- NEW
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -97,10 +97,12 @@ class PhotosViewModel(
 fun PhotosScreen(
     viewModel: PhotosViewModel,
     onSendToAgent: (List<String>) -> Unit,
-    onPhotoClick: (String) -> Unit // <-- NEW CALLBACK
+    onPhotoClick: (String) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val gridState = rememberLazyGridState()
+
+    // Use Staggered Grid State instead of LazyGridState
+    val gridState = rememberLazyStaggeredGridState()
 
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectedPhotos by remember { mutableStateOf(setOf<String>()) }
@@ -109,6 +111,7 @@ fun PhotosScreen(
         if (!isSelectionMode) selectedPhotos = emptySet()
     }
 
+    // Infinite Scroll Logic adapted for Staggered Grid
     LaunchedEffect(gridState) {
         snapshotFlow { gridState.layoutInfo }
             .distinctUntilChanged()
@@ -162,26 +165,27 @@ fun PhotosScreen(
             } else if (uiState.photos.isEmpty() && !uiState.isLoading) {
                 Text("No photos found.")
             } else {
-                LazyVerticalGrid(
+                // --- SWITCHED TO LAZY VERTICAL STAGGERED GRID ---
+                LazyVerticalStaggeredGrid(
                     state = gridState,
-                    columns = GridCells.Adaptive(minSize = 120.dp),
+                    columns = StaggeredGridCells.Adaptive(minSize = 150.dp), // Adaptive width
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalItemSpacing = 4.dp,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    contentPadding = PaddingValues(4.dp)
                 ) {
                     items(uiState.photos, key = { it }) { photoUri ->
                         val isSelected = selectedPhotos.contains(photoUri)
                         Box(modifier = Modifier
-                            .aspectRatio(1f)
+                            .wrapContentHeight() // Allow height to be determined by image
                             .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp)) // Add rounded corners for premium look
                             .combinedClickable(
                                 onClick = {
                                     if (isSelectionMode) {
                                         selectedPhotos = if (isSelected) selectedPhotos - photoUri else selectedPhotos + photoUri
                                         if (selectedPhotos.isEmpty()) isSelectionMode = false
                                     } else {
-                                        // --- NAVIGATE TO SINGLE PHOTO SCREEN ---
-                                        // We must encode the URI to safely pass it in navigation route
                                         val encodedUri = URLEncoder.encode(photoUri, StandardCharsets.UTF_8.name())
                                         onPhotoClick(encodedUri)
                                     }
@@ -197,15 +201,26 @@ fun PhotosScreen(
                             AsyncImage(
                                 model = photoUri,
                                 contentDescription = "Gallery Photo",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
+                                contentScale = ContentScale.Crop, // Crop fills the width, height is dynamic? No, Crop fills bounds.
+                                // For TRUE Staggered/Masonry effect where height varies:
+                                // We use ContentScale.FillWidth and let aspect ratio drive height.
+                                // However, loading ALL images with intrinsic size in a lazy list is heavy.
+                                // Best practice: Use a fixed aspect ratio OR allow variable height if Coil can determine it efficiently.
+                                // With StaggeredGrid + AsyncImage, 'ContentScale.Crop' with a modifier.fillMaxWidth()
+                                // and .wrapContentHeight() usually works IF the image loader returns dimensions.
+                                // A simpler robust approach for smooth scrolling is often to use a fixed height OR ratio,
+                                // but StaggeredGrid is specifically for variable heights.
+                                // Let's use FillWidth to respect aspect ratio.
+                                modifier = Modifier.fillMaxWidth().wrapContentHeight()
                             )
+
+                            // Selection Overlay
                             if (isSelectionMode) {
                                 Box(
                                     modifier = Modifier
-                                        .fillMaxSize()
+                                        .matchParentSize() // Overlay covers the whole image
                                         .background(if (isSelected) Color.Black.copy(alpha = 0.4f) else Color.Transparent)
-                                        .border(width = if (isSelected) 4.dp else 0.dp, color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                                        .border(width = if (isSelected) 4.dp else 0.dp, color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, shape = RoundedCornerShape(8.dp))
                                 )
                                 Box(
                                     modifier = Modifier.padding(8.dp).align(Alignment.TopEnd).size(24.dp).clip(CircleShape).background(
