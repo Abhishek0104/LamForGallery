@@ -86,11 +86,17 @@ class AgentViewModel(
 
     // --- STATE CACHE ---
     private var lastSearchResults: List<String> = emptyList()
+    // --- NEW: Cache for manual selection to persist context after UI clears ---
+    private var lastManualSelection: List<String> = emptyList()
 
     private data class SearchResult(val uri: String, val similarity: Float)
 
     fun toggleImageSelection(uri: String) { _uiState.update { s -> val n = s.selectedImageUris.toMutableSet(); if(n.contains(uri)) n.remove(uri) else n.add(uri); s.copy(selectedImageUris = n) } }
     fun setExternalSelection(uris: List<String>) { _uiState.update { it.copy(selectedImageUris = uris.toSet()) } }
+
+    // --- NEW: Explicit Clear Function ---
+    fun clearSelection() { _uiState.update { it.copy(selectedImageUris = emptySet()) } }
+
     fun openSelectionSheet(uris: List<String>) { _uiState.update { it.copy(isSelectionSheetOpen = true, selectionSheetUris = uris) } }
     fun confirmSelection(newSelection: Set<String>) { _uiState.update { it.copy(isSelectionSheetOpen = false, selectedImageUris = newSelection, selectionSheetUris = emptyList()) } }
     fun closeSelectionSheet() { _uiState.update { it.copy(isSelectionSheetOpen = false, selectionSheetUris = emptyList()) } }
@@ -99,19 +105,23 @@ class AgentViewModel(
         val currentState = _uiState.value
         if (currentState.currentStatus !is AgentStatus.Idle) return
 
-        // Capture selection but DO NOT clear it yet.
-        // We need it to persist until the agent responds so we know what "current selection" refers to.
+        // 1. Capture the selection
         val selectedUris = currentState.selectedImageUris.toList()
+
+        // 2. Update the "Last Manual Selection" cache so the agent can use it
+        if (selectedUris.isNotEmpty()) {
+            lastManualSelection = selectedUris
+        }
+
+        // 3. Clear the UI immediately (The Fix)
+        _uiState.update { it.copy(selectedImageUris = emptySet()) }
 
         viewModelScope.launch {
             addMessage(ChatMessage(text = input, sender = Sender.USER, imageUris = selectedUris.ifEmpty { null }))
             setStatus(AgentStatus.Loading("Thinking..."))
 
-            // Only encode images if we really need visuals (e.g., very small selection for Q&A)
-            // For large selections (bulk move), we just send the URIs in the prompt context
             var base64Images: List<String>? = null
-            if (selectedUris.isNotEmpty() && selectedUris.size <= 5) {
-                setStatus(AgentStatus.Loading("Reading images..."))
+            if (selectedUris.isNotEmpty() && selectedUris.size <= 3) {
                 try {
                     val images = ImageHelper.encodeImages(application, selectedUris)
                     if (images.isNotEmpty()) base64Images = images
@@ -136,14 +146,12 @@ class AgentViewModel(
                 sendToolResult(gson.toJson(false), toolCallId)
                 return@launch
             }
-            // Execute the deferred action
             when (type) {
                 PermissionType.DELETE -> {
                     val urisToDelete = args?.get("photo_uris") as? List<String> ?: emptyList()
                     withContext(Dispatchers.IO) {
                         try { urisToDelete.forEach { uri -> imageEmbeddingDao.deleteByUri(uri) } } catch (e: Exception) {}
                     }
-                    // Update UI to remove deleted items
                     _uiState.update {
                         it.copy(
                             selectedImageUris = it.selectedImageUris - urisToDelete.toSet(),
@@ -161,7 +169,6 @@ class AgentViewModel(
                     _galleryDidChange.emit(Unit)
                 }
             }
-            // Clear selection after successful action
             _uiState.update { it.copy(selectedImageUris = emptySet()) }
         }
     }
@@ -184,8 +191,13 @@ class AgentViewModel(
                         return
                     }
                     setStatus(AgentStatus.Loading("Working on it: ${action.name}..."))
-                    val toolResultObject = executeLocalTool(action)
-                    if (toolResultObject != null) sendToolResult(gson.toJson(toolResultObject), action.id)
+
+                    if (action.name == "describe_images") {
+                        executeDescribeImages(action)
+                    } else {
+                        val toolResultObject = executeLocalTool(action)
+                        if (toolResultObject != null) sendToolResult(gson.toJson(toolResultObject), action.id)
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -194,33 +206,30 @@ class AgentViewModel(
         }
     }
 
-    // --- NEW: Unified URI Resolution Logic ---
     private fun getUrisFromArgsOrSelection(
         argUris: Any?,
         useLastSearch: Boolean,
         useCurrentSelection: Boolean
     ): List<String> {
-        // 1. Use cached search results if flag is set
-        if (useLastSearch && lastSearchResults.isNotEmpty()) {
-            return lastSearchResults
-        }
+        if (useLastSearch && lastSearchResults.isNotEmpty()) return lastSearchResults
 
-        // 2. Use current UI selection if flag is set
-        // We access the *current* state directly to ensure freshness
         if (useCurrentSelection) {
-            val selected = _uiState.value.selectedImageUris.toList()
-            if (selected.isNotEmpty()) return selected
+            // Priority 1: If user happens to have active selection on screen right now
+            val active = _uiState.value.selectedImageUris.toList()
+            if (active.isNotEmpty()) return active
+
+            // Priority 2: The selection they JUST sent (cached)
+            if (lastManualSelection.isNotEmpty()) return lastManualSelection
         }
 
-        // 3. Fallback to explicit args
         return (argUris as? List<String>) ?: emptyList()
     }
 
-    private fun sendToolResult(resultJsonString: String, toolCallId: String) {
+    private fun sendToolResult(resultJsonString: String, toolCallId: String, base64Images: List<String>? = null) {
         viewModelScope.launch {
             setStatus(AgentStatus.Loading("Sending result..."))
             val toolResult = ToolResult(toolCallId = toolCallId, content = resultJsonString)
-            val request = AgentRequest(sessionId = currentSessionId, userInput = null, toolResult = toolResult)
+            val request = AgentRequest(sessionId = currentSessionId, userInput = null, toolResult = toolResult, base64Images = base64Images)
             handleAgentRequest(request)
         }
     }
@@ -233,6 +242,34 @@ class AgentViewModel(
         _uiState.update { it.copy(currentStatus = newStatus) }
     }
 
+    private suspend fun executeDescribeImages(toolCall: ToolCall) {
+        val actOnLast = toolCall.args["act_on_last_search_results"] as? Boolean ?: false
+        val useSelection = toolCall.args["use_current_selection"] as? Boolean ?: false
+        val question = toolCall.args["question"] as? String ?: "Describe these images"
+
+        val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"], actOnLast, useSelection)
+
+        if (uris.isEmpty()) {
+            sendToolResult(gson.toJson(mapOf("error" to "No images found to describe.")), toolCall.id)
+            return
+        }
+
+        val urisToAnalyze = uris.take(5)
+        setStatus(AgentStatus.Loading("Analyzing visual content..."))
+
+        val base64List = ImageHelper.encodeImages(application, urisToAnalyze)
+
+        if (base64List.isEmpty()) {
+            sendToolResult(gson.toJson(mapOf("error" to "Failed to read images.")), toolCall.id)
+        } else {
+            sendToolResult(
+                resultJsonString = gson.toJson(mapOf("status" to "Images provided for analysis", "count" to base64List.size, "question" to question)),
+                toolCallId = toolCall.id,
+                base64Images = base64List
+            )
+        }
+    }
+
     private suspend fun executeLocalTool(toolCall: ToolCall): Any? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
             (toolCall.name == "delete_photos" || toolCall.name == "move_photos_to_album")) {
@@ -242,7 +279,6 @@ class AgentViewModel(
         val result: Any? = try {
             when (toolCall.name) {
                 "search_photos" -> {
-                    // ... (Search logic remains same as previous step)
                     val query = toolCall.args["query"] as? String ?: ""
                     val startDateStr = toolCall.args["start_date"] as? String
                     val endDateStr = toolCall.args["end_date"] as? String
@@ -293,7 +329,7 @@ class AgentViewModel(
                         }
                     }
 
-                    lastSearchResults = foundUris // Update Cache
+                    lastSearchResults = foundUris
 
                     if (foundUris.isEmpty()) {
                         addMessage(ChatMessage(text = "I couldn't find any matching photos.", sender= Sender.AGENT))
@@ -384,6 +420,7 @@ class AgentViewModel(
     fun clearChat() {
         currentSessionId = UUID.randomUUID().toString()
         lastSearchResults = emptyList()
+        lastManualSelection = emptyList()
         _uiState.update {
             it.copy(
                 messages = emptyList(),
