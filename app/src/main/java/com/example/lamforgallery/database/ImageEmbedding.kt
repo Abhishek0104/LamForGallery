@@ -19,9 +19,8 @@ data class ImageEmbedding(
     @ColumnInfo(name = "location")
     val location: String? = null,
 
-    // --- NEW METADATA FIELDS ---
     @ColumnInfo(name = "date_taken")
-    val dateTaken: Long = 0L, // Epoch milliseconds
+    val dateTaken: Long = 0L,
 
     @ColumnInfo(name = "width")
     val width: Int = 0,
@@ -30,7 +29,11 @@ data class ImageEmbedding(
     val height: Int = 0,
 
     @ColumnInfo(name = "camera_model")
-    val cameraModel: String? = null
+    val cameraModel: String? = null,
+
+    // --- NEW: Soft Delete Flag ---
+    @ColumnInfo(name = "is_deleted")
+    val isDeleted: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -43,6 +46,7 @@ data class ImageEmbedding(
         if (width != other.width) return false
         if (height != other.height) return false
         if (cameraModel != other.cameraModel) return false
+        if (isDeleted != other.isDeleted) return false
         return true
     }
 
@@ -54,6 +58,7 @@ data class ImageEmbedding(
         result = 31 * result + width
         result = 31 * result + height
         result = 31 * result + (cameraModel?.hashCode() ?: 0)
+        result = 31 * result + isDeleted.hashCode()
         return result
     }
 }

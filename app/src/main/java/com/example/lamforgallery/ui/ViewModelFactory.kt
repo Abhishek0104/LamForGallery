@@ -41,7 +41,7 @@ class ViewModelFactory(
                     cleanupManager
                 ) as T
             }
-            modelClass.isAssignableFrom(PhotosViewModel::class.java) -> PhotosViewModel(galleryTools) as T
+            modelClass.isAssignableFrom(PhotosViewModel::class.java) -> PhotosViewModel(galleryTools, imageEmbeddingDao) as T
             modelClass.isAssignableFrom(AlbumsViewModel::class.java) -> AlbumsViewModel(galleryTools) as T
             modelClass.isAssignableFrom(AlbumDetailViewModel::class.java) -> AlbumDetailViewModel(galleryTools) as T
             modelClass.isAssignableFrom(EmbeddingViewModel::class.java) -> EmbeddingViewModel(application, imageEmbeddingDao, imageEncoder, galleryTools) as T
@@ -49,6 +49,7 @@ class ViewModelFactory(
             modelClass.isAssignableFrom(PeopleViewModel::class.java) -> PeopleViewModel(personDao) as T
             // --- NEW: Person Detail ViewModel ---
             modelClass.isAssignableFrom(PersonDetailViewModel::class.java) -> PersonDetailViewModel(personDao) as T
+            modelClass.isAssignableFrom(TrashViewModel::class.java) -> TrashViewModel(imageEmbeddingDao) as T
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }
     }

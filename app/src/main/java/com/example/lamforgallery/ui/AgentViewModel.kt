@@ -49,6 +49,12 @@ enum class Sender { USER, AGENT, ERROR }
 sealed class AgentStatus {
     data class Loading(val message: String) : AgentStatus()
     data class RequiresPermission(val intentSender: IntentSender, val type: PermissionType, val message: String) : AgentStatus()
+
+    data class RequiresConfirmation(
+        val message: String,
+        val onConfirm: () -> Unit,
+        val onCancel: () -> Unit
+    ) : AgentStatus()
     object Idle : AgentStatus()
 }
 
@@ -351,13 +357,40 @@ class AgentViewModel(
                     val useSelection = toolCall.args["use_current_selection"] as? Boolean ?: false
                     val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"], actOnLast, useSelection)
 
-                    val intentSender = galleryTools.createDeleteIntentSender(uris)
-                    if (intentSender != null) {
-                        pendingToolCallId = toolCall.id
-                        pendingToolArgs = mapOf("photo_uris" to uris)
-                        setStatus(AgentStatus.RequiresPermission(intentSender, PermissionType.DELETE, "Waiting for permission..."))
-                        null
-                    } else mapOf("error" to "Failed")
+                    if (uris.isNotEmpty()) {
+                        // --- INTERCEPT FOR PERMISSION ---
+                        // Instead of deleting immediately, we set the status to RequiresConfirmation
+                        // The return value 'null' tells the loop to wait (we will call sendToolResult manually later)
+                        setStatus(AgentStatus.RequiresConfirmation(
+                            message = "Are you sure you want to move ${uris.size} photos to the Trash?",
+                            onConfirm = {
+                                viewModelScope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        imageEmbeddingDao.softDelete(uris)
+                                    }
+                                    addMessage(ChatMessage(text = "Moved ${uris.size} photos to Trash.", sender = Sender.AGENT))
+                                    _galleryDidChange.emit(Unit)
+                                    sendToolResult(gson.toJson(mapOf("status" to "Deleted")), toolCall.id)
+                                }
+                            },
+                            onCancel = {
+                                addMessage(ChatMessage(text = "Deletion cancelled.", sender = Sender.AGENT))
+                                sendToolResult(gson.toJson(mapOf("status" to "Cancelled")), toolCall.id)
+                            }
+                        ))
+                        null // Return null to pause the agent loop
+                    } else {
+                        mapOf("error" to "No photos selected to delete.")
+                    }
+                }
+                "restore_photos" -> {
+                    val uris = toolCall.args["photo_uris"] as? List<String> ?: emptyList()
+                    if (uris.isNotEmpty()) {
+                        withContext(Dispatchers.IO) { imageEmbeddingDao.restore(uris) }
+                        addMessage(ChatMessage(text = "Restored ${uris.size} photos.", sender = Sender.AGENT))
+                        _galleryDidChange.emit(Unit)
+                        mapOf("status" to "Restored")
+                    } else mapOf("error" to "No photos to restore")
                 }
                 "move_photos_to_album" -> {
                     val actOnLast = toolCall.args["act_on_last_search_results"] as? Boolean ?: false

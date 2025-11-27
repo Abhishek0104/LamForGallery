@@ -5,37 +5,31 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 
-/**
- * Data Access Object (DAO) for the ImageEmbedding entity.
- * This is where all SQL queries are defined.
- */
 @Dao
 interface ImageEmbeddingDao {
 
-    /**
-     * Inserts a new image embedding. If an entry with the same URI
-     * already exists, it will be replaced.
-     */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(embedding: ImageEmbedding)
 
-    /**
-     * Retrieves all image embeddings from the database.
-     * This is the list we will search against.
-     */
-    @Query("SELECT * FROM image_embeddings")
+    @Query("SELECT * FROM image_embeddings WHERE is_deleted = 0")
     suspend fun getAllEmbeddings(): List<ImageEmbedding>
 
-    /**
-     * Deletes an embedding from the database using its URI.
-     */
+    @Query("SELECT * FROM image_embeddings WHERE is_deleted = 1")
+    suspend fun getTrashEmbeddings(): List<ImageEmbedding>
+
+    @Query("UPDATE image_embeddings SET is_deleted = 1 WHERE uri IN (:uris)")
+    suspend fun softDelete(uris: List<String>)
+
+    @Query("UPDATE image_embeddings SET is_deleted = 0 WHERE uri IN (:uris)")
+    suspend fun restore(uris: List<String>)
+
+    // --- Hard Delete (Permanent) for Trash ---
+    @Query("DELETE FROM image_embeddings WHERE uri IN (:uris)")
+    suspend fun hardDelete(uris: List<String>)
+
     @Query("DELETE FROM image_embeddings WHERE uri = :uri")
     suspend fun deleteByUri(uri: String)
 
-    /**
-     * Retrieves a single embedding by its URI.
-     * Useful for checking if an image is already indexed.
-     */
     @Query("SELECT * FROM image_embeddings WHERE uri = :uri LIMIT 1")
     suspend fun getEmbeddingByUri(uri: String): ImageEmbedding?
 }

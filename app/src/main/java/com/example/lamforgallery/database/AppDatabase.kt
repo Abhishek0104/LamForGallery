@@ -8,7 +8,7 @@ import androidx.room.TypeConverters
 
 @Database(
     entities = [ImageEmbedding::class, Person::class, ImagePersonCrossRef::class],
-    version = 6, // --- BUMPED TO 5 ---
+    version = 7, // --- BUMPED TO 5 ---
     exportSchema = false
 )
 @TypeConverters(Converters::class)

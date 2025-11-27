@@ -49,6 +49,26 @@ fun AgentScreen(
     val coroutineScope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState()
 
+    val status = uiState.currentStatus
+    if (status is AgentStatus.RequiresConfirmation) {
+        AlertDialog(
+            onDismissRequest = { status.onCancel() },
+            title = { Text("Confirmation Required") },
+            text = { Text(status.message) },
+            confirmButton = {
+                TextButton(onClick = { status.onConfirm() }) {
+                    Text("Confirm")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { status.onCancel() }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+
     if (uiState.isSelectionSheetOpen) {
         ModalBottomSheet(
             onDismissRequest = { viewModel.closeSelectionSheet() },
@@ -72,6 +92,12 @@ fun AgentScreen(
     LaunchedEffect(uiState.messages.size) {
         if (uiState.messages.isNotEmpty()) {
             listState.animateScrollToItem(uiState.messages.size - 1)
+        }
+    }
+
+    LaunchedEffect(status) {
+        if (status is AgentStatus.RequiresPermission) {
+            onLaunchPermissionRequest(status.intentSender, status.type)
         }
     }
 
@@ -172,6 +198,7 @@ fun AgentScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
             item { Spacer(modifier = Modifier.height(16.dp)) }
+
         }
     }
 }

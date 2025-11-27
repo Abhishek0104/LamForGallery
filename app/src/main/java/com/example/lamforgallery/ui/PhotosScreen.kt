@@ -6,10 +6,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid // --- NEW
-import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells // --- NEW
-import androidx.compose.foundation.lazy.staggeredgrid.items // --- NEW
-import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState // --- NEW
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -28,6 +28,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import com.example.lamforgallery.tools.GalleryTools
+import com.example.lamforgallery.database.ImageEmbeddingDao // Import DAO
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,7 +51,8 @@ data class PhotosScreenState(
 
 // --- ViewModel ---
 class PhotosViewModel(
-    private val galleryTools: GalleryTools
+    private val galleryTools: GalleryTools,
+    private val imageEmbeddingDao: ImageEmbeddingDao // Injected DAO
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PhotosScreenState())
@@ -72,19 +74,28 @@ class PhotosViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
 
-            val newPhotos = try {
+            // 1. Get raw photos from MediaStore
+            val rawPhotos = try {
                 galleryTools.getPhotos(page = currentState.page, pageSize = PAGE_SIZE)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load photos", e)
                 emptyList<String>()
             }
 
+            // 2. Filter out photos that are in our "Trash" (is_deleted = 1)
+            // We fetch the trash list to exclude them.
+            // Note: For huge galleries, querying DB for *every* page load isn't perfectly optimal,
+            // but for a demo with <1000 items, it's fine.
+            val trashList = imageEmbeddingDao.getTrashEmbeddings().map { it.uri }.toSet()
+
+            val filteredPhotos = rawPhotos.filter { !trashList.contains(it) }
+
             _uiState.update {
                 it.copy(
                     isLoading = false,
-                    photos = (it.photos + newPhotos).distinct(),
+                    photos = (it.photos + filteredPhotos).distinct(),
                     page = it.page + 1,
-                    canLoadMore = newPhotos.isNotEmpty()
+                    canLoadMore = rawPhotos.isNotEmpty() // Check raw size for pagination logic
                 )
             }
         }
@@ -201,17 +212,8 @@ fun PhotosScreen(
                             AsyncImage(
                                 model = photoUri,
                                 contentDescription = "Gallery Photo",
-                                contentScale = ContentScale.Crop, // Crop fills the width, height is dynamic? No, Crop fills bounds.
-                                // For TRUE Staggered/Masonry effect where height varies:
-                                // We use ContentScale.FillWidth and let aspect ratio drive height.
-                                // However, loading ALL images with intrinsic size in a lazy list is heavy.
-                                // Best practice: Use a fixed aspect ratio OR allow variable height if Coil can determine it efficiently.
-                                // With StaggeredGrid + AsyncImage, 'ContentScale.Crop' with a modifier.fillMaxWidth()
-                                // and .wrapContentHeight() usually works IF the image loader returns dimensions.
-                                // A simpler robust approach for smooth scrolling is often to use a fixed height OR ratio,
-                                // but StaggeredGrid is specifically for variable heights.
-                                // Let's use FillWidth to respect aspect ratio.
-                                modifier = Modifier.fillMaxWidth().wrapContentHeight()
+                                contentScale = ContentScale.FillWidth, // Changed from Crop for Staggered effect
+                                modifier = Modifier.fillMaxWidth().wrapContentHeight().heightIn(min = 100.dp, max = 300.dp)
                             )
 
                             // Selection Overlay

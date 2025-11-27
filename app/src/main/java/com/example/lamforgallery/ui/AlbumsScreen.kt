@@ -15,6 +15,9 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -27,9 +30,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import androidx.compose.foundation.clickable // --- NEW IMPORT ---
-import java.net.URLEncoder // --- NEW IMPORT ---
-import java.nio.charset.StandardCharsets // --- NEW IMPORT ---
+import androidx.compose.foundation.clickable
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 
 // 1. --- The ViewModel for this screen ---
 
@@ -73,22 +76,28 @@ class AlbumsViewModel(
 @Composable
 fun AlbumsScreen(
     viewModel: AlbumsViewModel,
-    onAlbumClick: (String) -> Unit // <-- ADD THIS PARAMETER
+    onAlbumClick: (String) -> Unit,
+    onTrashClick: () -> Unit // <-- NEW: Trash navigation callback
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 160.dp), // Albums are usually bigger
+        columns = GridCells.Adaptive(minSize = 160.dp),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // --- Static Item for Trash ---
+        item {
+            TrashAlbumItem(onClick = onTrashClick)
+        }
+
+        // --- Regular Albums ---
         items(uiState.albums, key = { it.name }) { album ->
             AlbumItem(
                 album = album,
                 onClick = {
-                    // We must URL-encode the album name in case it has spaces
                     val encodedName = URLEncoder.encode(album.name, StandardCharsets.UTF_8.name())
                     onAlbumClick(encodedName)
                 }
@@ -98,15 +107,49 @@ fun AlbumsScreen(
 }
 
 @Composable
+fun TrashAlbumItem(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant) // Distinct background
+            .clickable(onClick = onClick)
+    ) {
+        Icon(
+            imageVector = Icons.Default.DeleteOutline,
+            contentDescription = "Trash",
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(48.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp),
+            contentAlignment = Alignment.BottomStart
+        ) {
+            Text(
+                text = "Trash",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
 fun AlbumItem(
     album: GalleryTools.Album,
-    onClick: () -> Unit // <-- ADD THIS PARAMETER
+    onClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
             .aspectRatio(1f)
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick) // <-- ADD THIS MODIFIER
+            .clickable(onClick = onClick)
     ) {
         // Cover Image
         AsyncImage(
@@ -122,7 +165,6 @@ fun AlbumItem(
                 .fillMaxSize()
                 .background(
                     Color.Black.copy(alpha = 0.5f),
-                    // You can use a gradient here for a nicer effect
                 )
                 .padding(8.dp),
             contentAlignment = Alignment.BottomStart

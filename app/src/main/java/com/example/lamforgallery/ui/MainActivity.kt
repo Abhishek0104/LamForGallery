@@ -14,6 +14,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.ImageSearch
@@ -46,6 +47,8 @@ class MainActivity : ComponentActivity() {
     private val embeddingViewModel: EmbeddingViewModel by viewModels { factory }
     private val photoViewerViewModel: PhotoViewerViewModel by viewModels { factory }
     private val peopleViewModel: PeopleViewModel by viewModels { factory }
+    // --- NEW: Need this instance here to observe its events ---
+    private val trashViewModel: TrashViewModel by viewModels { factory }
 
     private val permissionToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_IMAGES
@@ -72,12 +75,23 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         checkAndRequestPermission()
+
+        // --- Observe Agent Changes ---
         lifecycleScope.launch {
             agentViewModel.galleryDidChange.collect {
                 photosViewModel.loadPhotos()
                 albumsViewModel.loadAlbums()
             }
         }
+
+        // --- NEW: Observe Trash Changes (Restoration) ---
+        lifecycleScope.launch {
+            trashViewModel.galleryDidChange.collect {
+                photosViewModel.loadPhotos()
+                albumsViewModel.loadAlbums()
+            }
+        }
+
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -90,6 +104,7 @@ class MainActivity : ComponentActivity() {
                             embeddingViewModel = embeddingViewModel,
                             photoViewerViewModel = photoViewerViewModel,
                             peopleViewModel = peopleViewModel,
+                            trashViewModel = trashViewModel, // Pass existing instance
                             onLaunchPermissionRequest = { intentSender, type ->
                                 currentPermissionType = type
                                 permissionRequestLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
@@ -128,6 +143,7 @@ fun AppNavigationHost(
     embeddingViewModel: EmbeddingViewModel,
     photoViewerViewModel: PhotoViewerViewModel,
     peopleViewModel: PeopleViewModel,
+    trashViewModel: TrashViewModel, // Receive instance
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit
 ) {
     val navController = rememberNavController()
@@ -155,6 +171,7 @@ fun AppNavigationHost(
                     navController.navigate("view_photo")
                 },
                 onNavigateToCleanup = { navController.navigate("cleanup_review") },
+                onNavigateToTrash = { navController.navigate("trash") },
                 onPersonClick = { personId -> navController.navigate("person_detail/$personId") }
             )
         }
@@ -177,7 +194,6 @@ fun AppNavigationHost(
             )
         }
 
-        // --- NEW: Person Detail Screen Route ---
         composable(
             route = "person_detail/{personId}",
             arguments = listOf(navArgument("personId") { type = NavType.StringType })
@@ -222,6 +238,18 @@ fun AppNavigationHost(
                 }
             )
         }
+
+        // --- NEW: Trash Route ---
+        composable("trash") {
+            // Use the shared ViewModel instance so events propagate correctly?
+            // Actually, for observing events in MainActivity, we needed the instance there.
+            // But the Screen here needs an instance to display data.
+            // Since we passed 'trashViewModel' into AppNavigationHost, we can use it directly here.
+            TrashScreen(
+                viewModel = trashViewModel,
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
     }
 }
 
@@ -237,11 +265,33 @@ fun AppShell(
     onTabSelected: (String) -> Unit,
     onAlbumClick: (String) -> Unit,
     onPhotoClick: (String) -> Unit,
-    onPersonClick: (String) -> Unit, // --- New Callback ---
+    onPersonClick: (String) -> Unit,
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit,
-    onNavigateToCleanup: () -> Unit
+    onNavigateToCleanup: () -> Unit,
+    onNavigateToTrash: () -> Unit // --- NEW CALLBACK ---
 ) {
     Scaffold(
+        // --- Top Bar ---
+        topBar = {
+            if (selectedTab != "agent") {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = when(selectedTab) {
+                                "photos" -> "Photos"
+                                "albums" -> "Albums"
+                                "people" -> "People"
+                                "indexing" -> "Settings"
+                                else -> "Gallery"
+                            }
+                        )
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                    )
+                )
+            }
+        },
         bottomBar = {
             NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
@@ -286,7 +336,11 @@ fun AppShell(
                     onSendToAgent = { uris -> agentViewModel.setExternalSelection(uris); onTabSelected("agent") },
                     onPhotoClick = onPhotoClick
                 )
-                "albums" -> AlbumsScreen(viewModel = albumsViewModel, onAlbumClick = onAlbumClick)
+                "albums" -> AlbumsScreen(
+                    viewModel = albumsViewModel,
+                    onAlbumClick = onAlbumClick,
+                    onTrashClick = onNavigateToTrash
+                )
                 "people" -> PeopleScreen(
                     viewModel = peopleViewModel,
                     onPersonClick = onPersonClick
