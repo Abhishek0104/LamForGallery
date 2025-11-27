@@ -16,7 +16,18 @@ interface PersonDao {
     @Query("SELECT * FROM people")
     suspend fun getAllPeople(): List<Person>
 
-    // --- NEW: Get single person by ID ---
+    // --- NEW: Get People with Image Count (Distinct URIs) ---
+    // This fixes the issue where faceCount counted detections (including collages/duplicates)
+    // instead of unique images.
+    @Query("""
+        SELECT p.id, p.name, p.coverUri, p.faceLeft, p.faceTop, p.faceRight, p.faceBottom,
+        COUNT(DISTINCT ip.uri) as imageCount
+        FROM people p
+        LEFT JOIN image_people ip ON p.id = ip.personId
+        GROUP BY p.id
+    """)
+    suspend fun getAllPeopleWithImageCount(): List<PersonUiModel>
+
     @Query("SELECT * FROM people WHERE id = :personId LIMIT 1")
     suspend fun getPersonById(personId: String): Person?
 

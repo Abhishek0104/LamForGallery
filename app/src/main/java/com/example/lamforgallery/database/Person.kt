@@ -19,14 +19,11 @@ data class Person(
 
     val coverUri: String? = null,
 
-    // --- NEW: Face Bounding Box (Normalized 0f-1f) ---
-    // We store normalized coordinates so we don't care about the image resolution
     val faceLeft: Float = 0f,
     val faceTop: Float = 0f,
     val faceRight: Float = 0f,
     val faceBottom: Float = 0f
 ) {
-    // ... (equals/hashCode remain same) ...
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
@@ -36,3 +33,15 @@ data class Person(
 
     override fun hashCode(): Int = id.hashCode() + name.hashCode() + embedding.contentHashCode()
 }
+
+// --- NEW: UI Model for People List (Lightweight & Correct Count) ---
+data class PersonUiModel(
+    val id: String,
+    val name: String,
+    val coverUri: String?,
+    val faceLeft: Float,
+    val faceTop: Float,
+    val faceRight: Float,
+    val faceBottom: Float,
+    val imageCount: Int
+)

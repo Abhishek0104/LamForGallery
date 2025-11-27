@@ -22,13 +22,13 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
-import com.example.lamforgallery.database.Person
+import com.example.lamforgallery.database.PersonUiModel // Import the new model
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PeopleScreen(
     viewModel: PeopleViewModel,
-    onPersonClick: (String) -> Unit // Changed: Pass ID instead of handling rename internally
+    onPersonClick: (String) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
@@ -65,7 +65,7 @@ fun PeopleScreen(
 }
 
 @Composable
-fun PersonItem(person: Person, onClick: () -> Unit) {
+fun PersonItem(person: PersonUiModel, onClick: () -> Unit) { // Changed to PersonUiModel
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
@@ -115,7 +115,7 @@ fun PersonItem(person: Person, onClick: () -> Unit) {
             maxLines = 1
         )
         Text(
-            text = "${person.faceCount} photos",
+            text = "${person.imageCount} photos", // Displaying the correct count
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
         )
