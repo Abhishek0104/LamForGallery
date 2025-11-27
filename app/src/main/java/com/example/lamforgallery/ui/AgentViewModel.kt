@@ -84,8 +84,15 @@ class AgentViewModel(
     private val _galleryDidChange = MutableSharedFlow<Unit>()
     val galleryDidChange: SharedFlow<Unit> = _galleryDidChange.asSharedFlow()
 
+    private val _photoSearchResults = MutableStateFlow<List<String>>(emptyList())
+    val photoSearchResults: StateFlow<List<String>> = _photoSearchResults.asStateFlow()
+
+    private val _searchDescription = MutableStateFlow("")
+    val searchDescription: StateFlow<String> = _searchDescription.asStateFlow()
+
     private var lastSearchResults: List<String> = emptyList()
     private var lastManualSelection: List<String> = emptyList()
+    private var isAwaitingSearchDescription: Boolean = false
 
     private data class SearchResult(val uri: String, val similarity: Float)
 
@@ -162,14 +169,23 @@ class AgentViewModel(
         }
     }
 
-    private suspend fun handleAgentRequest(request: AgentRequest) {
+    private suspend fun handleAgentRequest(request: AgentRequest, isPhotoSearch: Boolean = false) {
         try {
             val response = agentApi.invokeAgent(request)
             currentSessionId = response.sessionId
             when (response.status) {
                 "complete" -> {
                     val message = response.agentMessage ?: "Done."
-                    addMessage(ChatMessage(text = message, sender = Sender.AGENT, suggestions = response.suggestedActions))
+                    if (isAwaitingSearchDescription) {
+                        _searchDescription.value = message
+                        isAwaitingSearchDescription = false
+                    } else if (isPhotoSearch) {
+                        // This case can happen if the agent just returns a message instead of calling a tool
+                        _searchDescription.value = message
+                    }
+                    else {
+                        addMessage(ChatMessage(text = message, sender = Sender.AGENT, suggestions = response.suggestedActions))
+                    }
                     setStatus(AgentStatus.Idle)
                 }
                 "requires_action" -> {
@@ -182,10 +198,22 @@ class AgentViewModel(
                     setStatus(AgentStatus.Loading("Working on it: ${action.name}..."))
 
                     if (action.name == "describe_images") {
+                        isAwaitingSearchDescription = true
                         executeDescribeImages(action)
                     } else {
-                        val toolResultObject = executeLocalTool(action)
-                        if (toolResultObject != null) sendToolResult(gson.toJson(toolResultObject), action.id)
+                        val toolResultObject = executeLocalTool(action, silent = isPhotoSearch)
+                        if (toolResultObject != null) {
+                            if (action.name == "search_photos") {
+                                val uris = (toolResultObject as? Map<*, *>)?.get("uris") as? List<String> ?: emptyList()
+                                _photoSearchResults.value = uris
+                                // If the agent *only* returns search results, we're done.
+                                // If it has more actions, the flow will continue.
+                                if (response.nextActions.size == 1) {
+                                    setStatus(AgentStatus.Idle)
+                                }
+                            }
+                            sendToolResult(gson.toJson(toolResultObject), action.id)
+                        }
                     }
                 }
             }
@@ -256,7 +284,7 @@ class AgentViewModel(
         }
     }
 
-    private suspend fun executeLocalTool(toolCall: ToolCall): Any? {
+    private suspend fun executeLocalTool(toolCall: ToolCall, silent: Boolean = false): Any? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
             (toolCall.name == "delete_photos" || toolCall.name == "move_photos_to_album")) {
             return mapOf("error" to "Modify/Delete operations require Android 11+")
@@ -277,22 +305,16 @@ class AgentViewModel(
                         val personIds = mutableListOf<String>()
                         for (name in peopleNames) {
                             val targetName = if (name.lowercase() in listOf("me", "my", "myself")) "Me" else name
-
-                            // --- RELATIONSHIP LOOKUP LOGIC ---
-                            // 1. Try finding by Name
                             var person = personDao.getPersonByName(targetName)
-
-                            // 2. If no name match, try finding by Relation (e.g., "daughter")
                             if (person == null) {
                                 person = personDao.getPersonByRelation(targetName)
                             }
-
                             if (person != null) personIds.add(person.id)
                         }
                         if (personIds.isNotEmpty()) {
                             candidateUris = personDao.getUrisForPeople(personIds).toSet()
                         } else {
-                            addMessage(ChatMessage(text = "I couldn't find anyone named or related as ${peopleNames.joinToString()}.", sender = Sender.AGENT))
+                            if (!silent) addMessage(ChatMessage(text = "I couldn't find anyone named or related as ${peopleNames.joinToString()}.", sender = Sender.AGENT))
                             return mapOf("photos_found" to 0)
                         }
                     }
@@ -327,11 +349,11 @@ class AgentViewModel(
                     lastSearchResults = foundUris
 
                     if (foundUris.isEmpty()) {
-                        addMessage(ChatMessage(text = "I couldn't find any matching photos.", sender= Sender.AGENT))
-                        mapOf("photos_found" to 0)
+                        if (!silent) addMessage(ChatMessage(text = "I couldn't find any matching photos.", sender= Sender.AGENT))
+                        mapOf("photos_found" to 0, "uris" to emptyList<String>())
                     } else {
-                        addMessage(ChatMessage(text = "Found ${foundUris.size} photos.", sender = Sender.AGENT, imageUris = foundUris, hasSelectionPrompt = true))
-                        mapOf("photos_found" to foundUris.size, "uris" to foundUris.take(5))
+                        if (!silent) addMessage(ChatMessage(text = "Found ${foundUris.size} photos.", sender = Sender.AGENT, imageUris = foundUris, hasSelectionPrompt = true))
+                        mapOf("photos_found" to foundUris.size, "uris" to foundUris)
                     }
                 }
                 "scan_for_cleanup" -> {
@@ -410,6 +432,25 @@ class AgentViewModel(
             mapOf("error" to "Failed: ${e.message}")
         }
         return result
+    }
+
+    fun submitSearchQuery(query: String) {
+        viewModelScope.launch {
+            clearSearch()
+            setStatus(AgentStatus.Loading("Thinking..."))
+            val request = AgentRequest(sessionId = currentSessionId, userInput = query, toolResult = null)
+            handleAgentRequest(request, isPhotoSearch = true)
+        }
+    }
+
+    fun clearSearch() {
+        _photoSearchResults.value = emptyList()
+        _searchDescription.value = ""
+        isAwaitingSearchDescription = false
+        lastSearchResults = emptyList()
+        if (uiState.value.currentStatus is AgentStatus.Loading) {
+            setStatus(AgentStatus.Idle)
+        }
     }
 
     fun clearChat() {

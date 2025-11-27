@@ -1,28 +1,42 @@
 package com.example.lamforgallery.ui
 
 import android.util.Log
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid // --- NEW
-import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells // --- NEW
-import androidx.compose.foundation.lazy.staggeredgrid.items // --- NEW
-import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState // --- NEW
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -59,8 +73,13 @@ class PhotosViewModel(
     private val TAG = "PhotosViewModel"
 
     fun loadPhotos() {
+        if (_uiState.value.photos.isNotEmpty()) return // Don't reload if already loaded
         _uiState.value = PhotosScreenState()
         loadNextPage()
+    }
+
+    fun clearPhotos() {
+        _uiState.value = PhotosScreenState()
     }
 
     fun loadNextPage() {
@@ -91,27 +110,45 @@ class PhotosViewModel(
     }
 }
 
+
 // --- Composable UI ---
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun PhotosScreen(
-    viewModel: PhotosViewModel,
+    photosViewModel: PhotosViewModel,
+    agentViewModel: AgentViewModel,
     onSendToAgent: (List<String>) -> Unit,
     onPhotoClick: (String) -> Unit
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val photosUiState by photosViewModel.uiState.collectAsState()
+    val agentUiState by agentViewModel.uiState.collectAsState()
+    val searchResults by agentViewModel.photoSearchResults.collectAsState()
+    val searchDescription by agentViewModel.searchDescription.collectAsState()
 
-    // Use Staggered Grid State instead of LazyGridState
+    var isSearchActive by remember { mutableStateOf(false) }
+    var searchAttempted by remember { mutableStateOf(false) }
+    val photosToShow = if (isSearchActive) searchResults else photosUiState.photos
+
     val gridState = rememberLazyStaggeredGridState()
-
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectedPhotos by remember { mutableStateOf(setOf<String>()) }
+
 
     LaunchedEffect(isSelectionMode) {
         if (!isSelectionMode) selectedPhotos = emptySet()
     }
 
-    // Infinite Scroll Logic adapted for Staggered Grid
+    // When search is dismissed, reload the original photos
+    LaunchedEffect(isSearchActive) {
+        if (!isSearchActive) {
+            agentViewModel.clearSearch()
+            searchAttempted = false
+            if (photosUiState.photos.isEmpty()) {
+                photosViewModel.loadPhotos()
+            }
+        }
+    }
+
     LaunchedEffect(gridState) {
         snapshotFlow { gridState.layoutInfo }
             .distinctUntilChanged()
@@ -119,14 +156,25 @@ fun PhotosScreen(
                 val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull() ?: return@collect
                 val totalItems = layoutInfo.totalItemsCount
                 if (lastVisibleItem.index >= totalItems - (PAGE_SIZE / 2) &&
-                    !uiState.isLoading && uiState.canLoadMore
+                    !photosUiState.isLoading && photosUiState.canLoadMore && !isSearchActive
                 ) {
-                    viewModel.loadNextPage()
+                    photosViewModel.loadNextPage()
                 }
             }
     }
 
     Scaffold(
+        topBar = {
+            PhotosSearchBar(
+                isSearchActive = isSearchActive,
+                onSearchActiveChange = { isSearchActive = it },
+                onSearchSubmit = { query ->
+                    searchAttempted = true
+                    agentViewModel.submitSearchQuery(query)
+                },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+        },
         floatingActionButton = {
             if (isSelectionMode && selectedPhotos.isNotEmpty()) {
                 ExtendedFloatingActionButton(
@@ -139,47 +187,34 @@ fun PhotosScreen(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
                 )
             }
-        },
-        topBar = {
-            if (isSelectionMode) {
-                TopAppBar(
-                    title = { Text("${selectedPhotos.size} selected") },
-                    navigationIcon = {
-                        IconButton(onClick = { isSelectionMode = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close Selection")
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                )
-            }
         }
     ) { paddingValues ->
         Box(
             modifier = Modifier.fillMaxSize().padding(paddingValues),
             contentAlignment = Alignment.Center
         ) {
-            if (uiState.photos.isEmpty() && uiState.isLoading) {
+            val isLoading = photosUiState.isLoading || agentUiState.currentStatus is AgentStatus.Loading
+            if (photosToShow.isEmpty() && isLoading && isSearchActive) {
                 CircularProgressIndicator()
-            } else if (uiState.photos.isEmpty() && !uiState.isLoading) {
-                Text("No photos found.")
+            } else if (photosToShow.isEmpty() && !isLoading && isSearchActive && searchAttempted) {
+                Text("No matching photos found.")
+            } else if (photosUiState.photos.isEmpty() && !isLoading && !isSearchActive) {
+                Text("No photos found in gallery.")
             } else {
-                // --- SWITCHED TO LAZY VERTICAL STAGGERED GRID ---
                 LazyVerticalStaggeredGrid(
                     state = gridState,
-                    columns = StaggeredGridCells.Adaptive(minSize = 150.dp), // Adaptive width
+                    columns = StaggeredGridCells.Adaptive(minSize = 150.dp),
                     modifier = Modifier.fillMaxSize(),
                     verticalItemSpacing = 4.dp,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     contentPadding = PaddingValues(4.dp)
                 ) {
-                    items(uiState.photos, key = { it }) { photoUri ->
+                    items(photosToShow, key = { it }) { photoUri ->
                         val isSelected = selectedPhotos.contains(photoUri)
                         Box(modifier = Modifier
-                            .wrapContentHeight() // Allow height to be determined by image
+                            .wrapContentHeight()
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp)) // Add rounded corners for premium look
+                            .clip(RoundedCornerShape(8.dp))
                             .combinedClickable(
                                 onClick = {
                                     if (isSelectionMode) {
@@ -201,24 +236,14 @@ fun PhotosScreen(
                             AsyncImage(
                                 model = photoUri,
                                 contentDescription = "Gallery Photo",
-                                contentScale = ContentScale.Crop, // Crop fills the width, height is dynamic? No, Crop fills bounds.
-                                // For TRUE Staggered/Masonry effect where height varies:
-                                // We use ContentScale.FillWidth and let aspect ratio drive height.
-                                // However, loading ALL images with intrinsic size in a lazy list is heavy.
-                                // Best practice: Use a fixed aspect ratio OR allow variable height if Coil can determine it efficiently.
-                                // With StaggeredGrid + AsyncImage, 'ContentScale.Crop' with a modifier.fillMaxWidth()
-                                // and .wrapContentHeight() usually works IF the image loader returns dimensions.
-                                // A simpler robust approach for smooth scrolling is often to use a fixed height OR ratio,
-                                // but StaggeredGrid is specifically for variable heights.
-                                // Let's use FillWidth to respect aspect ratio.
+                                contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxWidth().wrapContentHeight()
                             )
 
-                            // Selection Overlay
                             if (isSelectionMode) {
                                 Box(
                                     modifier = Modifier
-                                        .matchParentSize() // Overlay covers the whole image
+                                        .matchParentSize()
                                         .background(if (isSelected) Color.Black.copy(alpha = 0.4f) else Color.Transparent)
                                         .border(width = if (isSelected) 4.dp else 0.dp, color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent, shape = RoundedCornerShape(8.dp))
                                 )
@@ -233,9 +258,124 @@ fun PhotosScreen(
                             }
                         }
                     }
-                    if (uiState.isLoading && uiState.photos.isNotEmpty()) {
+                    if (photosUiState.isLoading && photosToShow.isNotEmpty()) {
                         item { Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(modifier = Modifier.size(32.dp)) } }
                     }
+                }
+            }
+            AnimatedVisibility(
+                visible = searchDescription.isNotEmpty(),
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                ) {
+                    Text(
+                        text = searchDescription,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PhotosSearchBar(
+    isSearchActive: Boolean,
+    onSearchActiveChange: (Boolean) -> Unit,
+    onSearchSubmit: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(isSearchActive) {
+        if (isSearchActive) {
+            focusRequester.requestFocus()
+        }
+    }
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (!isSearchActive) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .clickable { onSearchActiveChange(true) },
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                tonalElevation = 4.dp,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "Search",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Search photos...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        } else {
+            TextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Ask about your photos...") },
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = {
+                    onSearchSubmit(searchQuery)
+                    keyboardController?.hide()
+                }),
+                shape = CircleShape,
+                colors = TextFieldDefaults.colors(
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent
+                ),
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear Search")
+                        }
+                    }
+                }
+            )
+            AnimatedVisibility(
+                visible = isSearchActive,
+                enter = fadeIn(animationSpec = spring(stiffness = 300f)) + expandHorizontally(expandFrom = Alignment.Start),
+                exit = fadeOut(animationSpec = spring(stiffness = 300f)) + shrinkHorizontally(shrinkTowards = Alignment.Start)
+            ) {
+                TextButton(
+                    onClick = {
+                        onSearchActiveChange(false)
+                        searchQuery = ""
+                        keyboardController?.hide()
+                    },
+                    modifier = Modifier.padding(start = 8.dp)
+                ) {
+                    Text("Cancel")
                 }
             }
         }

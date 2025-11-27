@@ -145,13 +145,12 @@ fun AppNavigationHost(
                 onTabSelected = { selectedTab = it },
                 onAlbumClick = { encodedName -> navController.navigate("album_detail/$encodedName") },
                 onLaunchPermissionRequest = onLaunchPermissionRequest,
-                onPhotoClick = { encodedUri ->
-                    val currentList = photosViewModel.uiState.value.photos
+                onPhotoClick = { encodedUri, photoList ->
                     val uri = try {
                         URLDecoder.decode(encodedUri, StandardCharsets.UTF_8.name())
                     } catch(e:Exception) { encodedUri }
 
-                    photoViewerViewModel.setPhotoList(currentList, uri)
+                    photoViewerViewModel.setPhotoList(photoList, uri)
                     navController.navigate("view_photo")
                 },
                 onNavigateToCleanup = { navController.navigate("cleanup_review") },
@@ -177,7 +176,6 @@ fun AppNavigationHost(
             )
         }
 
-        // --- NEW: Person Detail Screen Route ---
         composable(
             route = "person_detail/{personId}",
             arguments = listOf(navArgument("personId") { type = NavType.StringType })
@@ -236,8 +234,8 @@ fun AppShell(
     selectedTab: String,
     onTabSelected: (String) -> Unit,
     onAlbumClick: (String) -> Unit,
-    onPhotoClick: (String) -> Unit,
-    onPersonClick: (String) -> Unit, // --- New Callback ---
+    onPhotoClick: (String, List<String>) -> Unit,
+    onPersonClick: (String) -> Unit,
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit,
     onNavigateToCleanup: () -> Unit
 ) {
@@ -281,11 +279,18 @@ fun AppShell(
     ) { paddingValues ->
         Box(modifier = Modifier.padding(paddingValues)) {
             when (selectedTab) {
-                "photos" -> PhotosScreen(
-                    viewModel = photosViewModel,
-                    onSendToAgent = { uris -> agentViewModel.setExternalSelection(uris); onTabSelected("agent") },
-                    onPhotoClick = onPhotoClick
-                )
+                "photos" -> {
+                    val agentSearchResults by agentViewModel.photoSearchResults.collectAsState()
+                    val photosUiState by photosViewModel.uiState.collectAsState()
+                    val photoList = if (agentSearchResults.isNotEmpty()) agentSearchResults else photosUiState.photos
+
+                    PhotosScreen(
+                        photosViewModel = photosViewModel,
+                        agentViewModel = agentViewModel,
+                        onSendToAgent = { uris -> agentViewModel.setExternalSelection(uris); onTabSelected("agent") },
+                        onPhotoClick = { uri -> onPhotoClick(uri, photoList) }
+                    )
+                }
                 "albums" -> AlbumsScreen(viewModel = albumsViewModel, onAlbumClick = onAlbumClick)
                 "people" -> PeopleScreen(
                     viewModel = peopleViewModel,
