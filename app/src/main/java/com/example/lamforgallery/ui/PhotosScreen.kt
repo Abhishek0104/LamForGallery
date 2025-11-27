@@ -1,5 +1,6 @@
 package com.example.lamforgallery.ui
 
+import android.app.Application
 import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.spring
@@ -41,13 +42,25 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
+import com.example.lamforgallery.agent.AgentFactory
+import com.example.lamforgallery.database.ImageEmbeddingDao
+import com.example.lamforgallery.database.PersonDao
+import com.example.lamforgallery.ml.ClipTokenizer
+import com.example.lamforgallery.ml.TextEncoder
 import com.example.lamforgallery.tools.GalleryTools
+import com.example.lamforgallery.tools.GalleryToolSet
+import com.example.lamforgallery.utils.CleanupManager
+import ai.koog.agents.core.agent.AIAgent
+import ai.koog.agents.core.tools.ToolRegistry
+import ai.koog.agents.core.tools.reflect.asTools
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
@@ -59,18 +72,31 @@ data class PhotosScreenState(
     val photos: List<String> = emptyList(),
     val isLoading: Boolean = false,
     val canLoadMore: Boolean = true,
-    val page: Int = 0
+    val page: Int = 0,
+    val agentResponse: String = "",
+    val isAgentProcessing: Boolean = false
 )
 
 // --- ViewModel ---
 class PhotosViewModel(
-    private val galleryTools: GalleryTools
+    private val application: Application,
+    private val galleryTools: GalleryTools,
+    private val imageEmbeddingDao: ImageEmbeddingDao,
+    private val personDao: PersonDao,
+    private val clipTokenizer: ClipTokenizer,
+    private val textEncoder: TextEncoder,
+    private val cleanupManager: CleanupManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PhotosScreenState())
     val uiState: StateFlow<PhotosScreenState> = _uiState.asStateFlow()
 
     private val TAG = "PhotosViewModel"
+    
+    // --- Koog Agent ---
+    private var agent: AIAgent<String, String>? = null
+    private var lastSearchResults: List<String> = emptyList()
+    private var lastManualSelection: List<String> = emptyList()
 
     fun loadPhotos() {
         if (_uiState.value.photos.isNotEmpty()) return // Don't reload if already loaded
@@ -108,6 +134,63 @@ class PhotosViewModel(
             }
         }
     }
+
+    // --- Agent Integration ---
+    suspend fun processAgentQuery(query: String): String {
+        _uiState.update { it.copy(isAgentProcessing = true, agentResponse = "") }
+        
+        return try {
+            // Create agent if it doesn't exist
+            val toolRegistry = ToolRegistry {
+                tools(createGalleryToolSet().asTools())
+            }
+            agent = AgentFactory.createSearchAgent(toolRegistry)
+            
+            Log.d(TAG, "🚀 AGENT EXECUTION START with query: $query")
+            val response = agent!!.run(query)
+            Log.d(TAG, "✅ AGENT EXECUTION COMPLETE: $response")
+            
+            val finalResponse = response ?: "No response from agent."
+            _uiState.update { it.copy(agentResponse = finalResponse, isAgentProcessing = false) }
+            finalResponse
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in agent execution", e)
+            val errorMsg = "Error: ${e.message}"
+            _uiState.update { it.copy(agentResponse = errorMsg, isAgentProcessing = false) }
+            errorMsg
+        }
+    }
+
+    private fun createGalleryToolSet(): GalleryToolSet {
+        return GalleryToolSet(
+            context = application,
+            galleryTools = galleryTools,
+            imageEmbeddingDao = imageEmbeddingDao,
+            personDao = personDao,
+            clipTokenizer = clipTokenizer,
+            textEncoder = textEncoder,
+            cleanupManager = cleanupManager,
+            onSearchResults = { uris -> 
+                lastSearchResults = uris
+                // Update photos to show search results
+                _uiState.update { it.copy(photos = uris, page = 1, canLoadMore = false) }
+            },
+            getLastSearchResults = { lastSearchResults },
+            getLastManualSelection = { lastManualSelection },
+            onPermissionRequired = { _, _, _, _ -> 
+                // Handle permissions if needed
+            },
+            onMessage = { text, imageUris, _, _ ->
+                _uiState.update { it.copy(agentResponse = text) }
+            },
+            onCleanupGroups = { _ -> },
+            onGalleryChanged = { }
+        )
+    }
+
+    fun clearAgentResponse() {
+        _uiState.update { it.copy(agentResponse = "") }
+    }
 }
 
 
@@ -121,13 +204,10 @@ fun PhotosScreen(
     onPhotoClick: (String) -> Unit
 ) {
     val photosUiState by photosViewModel.uiState.collectAsState()
-    val agentUiState by agentViewModel.uiState.collectAsState()
-    val searchResults by agentViewModel.photoSearchResults.collectAsState()
-    val searchDescription by agentViewModel.searchDescription.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
 
     var isSearchActive by remember { mutableStateOf(false) }
-    var searchAttempted by remember { mutableStateOf(false) }
-    val photosToShow = if (isSearchActive) searchResults else photosUiState.photos
+    val photosToShow = photosUiState.photos
 
     val gridState = rememberLazyStaggeredGridState()
     var isSelectionMode by remember { mutableStateOf(false) }
@@ -141,8 +221,7 @@ fun PhotosScreen(
     // When search is dismissed, reload the original photos
     LaunchedEffect(isSearchActive) {
         if (!isSearchActive) {
-            agentViewModel.clearSearch()
-            searchAttempted = false
+            photosViewModel.clearAgentResponse()
             if (photosUiState.photos.isEmpty()) {
                 photosViewModel.loadPhotos()
             }
@@ -169,8 +248,9 @@ fun PhotosScreen(
                 isSearchActive = isSearchActive,
                 onSearchActiveChange = { isSearchActive = it },
                 onSearchSubmit = { query ->
-                    searchAttempted = true
-                    agentViewModel.submitSearchQuery(query)
+                    coroutineScope.launch {
+                        photosViewModel.processAgentQuery(query)
+                    }
                 },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
@@ -193,12 +273,10 @@ fun PhotosScreen(
             modifier = Modifier.fillMaxSize().padding(paddingValues),
             contentAlignment = Alignment.Center
         ) {
-            val isLoading = photosUiState.isLoading || agentUiState.currentStatus is AgentStatus.Loading
-            if (photosToShow.isEmpty() && isLoading && isSearchActive) {
+            val isLoading = photosUiState.isLoading || photosUiState.isAgentProcessing
+            if (photosToShow.isEmpty() && isLoading) {
                 CircularProgressIndicator()
-            } else if (photosToShow.isEmpty() && !isLoading && isSearchActive && searchAttempted) {
-                Text("No matching photos found.")
-            } else if (photosUiState.photos.isEmpty() && !isLoading && !isSearchActive) {
+            } else if (photosToShow.isEmpty() && !isLoading) {
                 Text("No photos found in gallery.")
             } else {
                 LazyVerticalStaggeredGrid(
@@ -264,7 +342,7 @@ fun PhotosScreen(
                 }
             }
             AnimatedVisibility(
-                visible = searchDescription.isNotEmpty(),
+                visible = photosUiState.agentResponse.isNotEmpty(),
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -277,11 +355,20 @@ fun PhotosScreen(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
                     elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                 ) {
-                    Text(
-                        text = searchDescription,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.padding(16.dp)
-                    )
+                    Row(
+                        modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = photosUiState.agentResponse,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { photosViewModel.clearAgentResponse() }) {
+                            Icon(Icons.Default.Close, contentDescription = "Dismiss")
+                        }
+                    }
                 }
             }
         }

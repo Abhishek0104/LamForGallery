@@ -104,7 +104,8 @@ fun AgentScreen(
                 status = uiState.currentStatus,
                 selectionCount = uiState.selectedImageUris.size,
                 onSend = { viewModel.sendUserInput(it) },
-                onClearSelection = { viewModel.clearSelection() }
+                onClearSelection = { viewModel.clearSelection() },
+                isWaitingForInput = uiState.isWaitingForUserInput
             )
         }
     ) { paddingValues ->
@@ -402,9 +403,9 @@ fun SelectablePhotoItem(uri: String, isSelected: Boolean, onToggle: () -> Unit) 
 }
 
 @Composable
-fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> Unit, onClearSelection: () -> Unit) {
+fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> Unit, onClearSelection: () -> Unit, isWaitingForInput: Boolean = false) {
     var inputText by remember { mutableStateOf("") }
-    val isEnabled = status is AgentStatus.Idle
+    val isEnabled = status is AgentStatus.Idle || isWaitingForInput
 
     Surface(
         tonalElevation = 2.dp,

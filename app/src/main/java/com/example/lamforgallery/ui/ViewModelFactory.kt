@@ -3,8 +3,6 @@ package com.example.lamforgallery.ui
 import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import com.example.lamforgallery.network.AgentApiService
-import com.example.lamforgallery.network.NetworkModule
 import com.example.lamforgallery.tools.GalleryTools
 import com.example.lamforgallery.database.AppDatabase
 import com.example.lamforgallery.database.ImageEmbeddingDao
@@ -18,11 +16,11 @@ class ViewModelFactory(
     private val application: Application
 ) : ViewModelProvider.Factory {
 
-    private val gson: Gson by lazy { NetworkModule.gson }
+    private val gson: Gson by lazy { Gson() }
     private val galleryTools: GalleryTools by lazy { GalleryTools(application) }
-    private val agentApi: AgentApiService by lazy { NetworkModule.apiService }
     private val appDatabase: AppDatabase by lazy { AppDatabase.getDatabase(application) }
     private val imageEmbeddingDao: ImageEmbeddingDao by lazy { appDatabase.imageEmbeddingDao() }
+    // --- NEW: Person Dao ---
     private val personDao by lazy { appDatabase.personDao() }
 
     private val imageEncoder: ImageEncoder by lazy { ImageEncoder(application) }
@@ -35,19 +33,27 @@ class ViewModelFactory(
         return when {
             modelClass.isAssignableFrom(AgentViewModel::class.java) -> {
                 AgentViewModel(
-                    application, agentApi, galleryTools, gson,
+                    application, galleryTools, gson,
                     imageEmbeddingDao, personDao, clipTokenizer,
                     textEncoder,
                     cleanupManager
                 ) as T
             }
-            modelClass.isAssignableFrom(PhotosViewModel::class.java) -> PhotosViewModel(galleryTools) as T
+            modelClass.isAssignableFrom(PhotosViewModel::class.java) -> PhotosViewModel(
+                application,
+                galleryTools,
+                imageEmbeddingDao,
+                personDao,
+                clipTokenizer,
+                textEncoder,
+                cleanupManager
+            ) as T
             modelClass.isAssignableFrom(AlbumsViewModel::class.java) -> AlbumsViewModel(galleryTools) as T
             modelClass.isAssignableFrom(AlbumDetailViewModel::class.java) -> AlbumDetailViewModel(galleryTools) as T
             modelClass.isAssignableFrom(EmbeddingViewModel::class.java) -> EmbeddingViewModel(application, imageEmbeddingDao, imageEncoder, galleryTools) as T
             modelClass.isAssignableFrom(PhotoViewerViewModel::class.java) -> PhotoViewerViewModel() as T
+            // --- NEW: People ViewModel ---
             modelClass.isAssignableFrom(PeopleViewModel::class.java) -> PeopleViewModel(personDao) as T
-            // --- NEW: Person Detail ViewModel ---
             modelClass.isAssignableFrom(PersonDetailViewModel::class.java) -> PersonDetailViewModel(personDao) as T
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
         }
