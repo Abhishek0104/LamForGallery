@@ -1,4 +1,3 @@
-// ... (imports match your original file)
 package com.example.lamforgallery.ui
 
 import android.app.Application
@@ -35,7 +34,6 @@ import java.util.UUID
 import java.time.LocalDate
 import java.time.ZoneId
 
-// ... (State classes ChatMessage, AgentUiState etc. - copy from original)
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val text: String,
@@ -86,13 +84,19 @@ class AgentViewModel(
     private val _galleryDidChange = MutableSharedFlow<Unit>()
     val galleryDidChange: SharedFlow<Unit> = _galleryDidChange.asSharedFlow()
 
-    private data class SearchResult(val uri: String, val similarity: Float)
+    // --- STATE CACHE ---
+    private var lastSearchResults: List<String> = emptyList()
+    // --- NEW: Cache for manual selection to persist context after UI clears ---
+    private var lastManualSelection: List<String> = emptyList()
 
-    // ... (Keep toggleImageSelection, setExternalSelection, openSelectionSheet, confirmSelection, closeSelectionSheet, sendUserInput, onPermissionResult, handleAgentRequest) ...
-    // Assume these methods exist exactly as in your previous file.
+    private data class SearchResult(val uri: String, val similarity: Float)
 
     fun toggleImageSelection(uri: String) { _uiState.update { s -> val n = s.selectedImageUris.toMutableSet(); if(n.contains(uri)) n.remove(uri) else n.add(uri); s.copy(selectedImageUris = n) } }
     fun setExternalSelection(uris: List<String>) { _uiState.update { it.copy(selectedImageUris = uris.toSet()) } }
+
+    // --- NEW: Explicit Clear Function ---
+    fun clearSelection() { _uiState.update { it.copy(selectedImageUris = emptySet()) } }
+
     fun openSelectionSheet(uris: List<String>) { _uiState.update { it.copy(isSelectionSheetOpen = true, selectionSheetUris = uris) } }
     fun confirmSelection(newSelection: Set<String>) { _uiState.update { it.copy(isSelectionSheetOpen = false, selectedImageUris = newSelection, selectionSheetUris = emptyList()) } }
     fun closeSelectionSheet() { _uiState.update { it.copy(isSelectionSheetOpen = false, selectionSheetUris = emptyList()) } }
@@ -100,21 +104,31 @@ class AgentViewModel(
     fun sendUserInput(input: String) {
         val currentState = _uiState.value
         if (currentState.currentStatus !is AgentStatus.Idle) return
+
+        // 1. Capture the selection
         val selectedUris = currentState.selectedImageUris.toList()
+
+        // 2. Update the "Last Manual Selection" cache so the agent can use it
+        if (selectedUris.isNotEmpty()) {
+            lastManualSelection = selectedUris
+        }
+
+        // 3. Clear the UI immediately (The Fix)
         _uiState.update { it.copy(selectedImageUris = emptySet()) }
 
         viewModelScope.launch {
             addMessage(ChatMessage(text = input, sender = Sender.USER, imageUris = selectedUris.ifEmpty { null }))
             setStatus(AgentStatus.Loading("Thinking..."))
+
             var base64Images: List<String>? = null
-            if (selectedUris.isNotEmpty()) {
-                setStatus(AgentStatus.Loading("Reading images..."))
+            if (selectedUris.isNotEmpty() && selectedUris.size <= 3) {
                 try {
                     val images = ImageHelper.encodeImages(application, selectedUris)
                     if (images.isNotEmpty()) base64Images = images
                 } catch (e: Exception) { Log.e(TAG, "Encode failed", e) }
-                setStatus(AgentStatus.Loading("Thinking..."))
             }
+
+            setStatus(AgentStatus.Loading("Thinking..."))
             val request = AgentRequest(sessionId = currentSessionId, userInput = input, toolResult = null, selectedUris = selectedUris.ifEmpty { null }, base64Images = base64Images)
             handleAgentRequest(request)
         }
@@ -138,7 +152,12 @@ class AgentViewModel(
                     withContext(Dispatchers.IO) {
                         try { urisToDelete.forEach { uri -> imageEmbeddingDao.deleteByUri(uri) } } catch (e: Exception) {}
                     }
-                    _uiState.update { it.copy(selectedImageUris = it.selectedImageUris - urisToDelete.toSet(), selectionSheetUris = it.selectionSheetUris - urisToDelete.toSet()) }
+                    _uiState.update {
+                        it.copy(
+                            selectedImageUris = it.selectedImageUris - urisToDelete.toSet(),
+                            selectionSheetUris = it.selectionSheetUris - urisToDelete.toSet()
+                        )
+                    }
                     sendToolResult(gson.toJson(true), toolCallId)
                     _galleryDidChange.emit(Unit)
                 }
@@ -150,6 +169,7 @@ class AgentViewModel(
                     _galleryDidChange.emit(Unit)
                 }
             }
+            _uiState.update { it.copy(selectedImageUris = emptySet()) }
         }
     }
 
@@ -171,8 +191,13 @@ class AgentViewModel(
                         return
                     }
                     setStatus(AgentStatus.Loading("Working on it: ${action.name}..."))
-                    val toolResultObject = executeLocalTool(action)
-                    if (toolResultObject != null) sendToolResult(gson.toJson(toolResultObject), action.id)
+
+                    if (action.name == "describe_images") {
+                        executeDescribeImages(action)
+                    } else {
+                        val toolResultObject = executeLocalTool(action)
+                        if (toolResultObject != null) sendToolResult(gson.toJson(toolResultObject), action.id)
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -181,17 +206,30 @@ class AgentViewModel(
         }
     }
 
-    private fun getUrisFromArgsOrSelection(argUris: Any?): List<String> {
-        val selectedUris = _uiState.value.selectedImageUris
-        if (selectedUris.isNotEmpty()) return selectedUris.toList()
+    private fun getUrisFromArgsOrSelection(
+        argUris: Any?,
+        useLastSearch: Boolean,
+        useCurrentSelection: Boolean
+    ): List<String> {
+        if (useLastSearch && lastSearchResults.isNotEmpty()) return lastSearchResults
+
+        if (useCurrentSelection) {
+            // Priority 1: If user happens to have active selection on screen right now
+            val active = _uiState.value.selectedImageUris.toList()
+            if (active.isNotEmpty()) return active
+
+            // Priority 2: The selection they JUST sent (cached)
+            if (lastManualSelection.isNotEmpty()) return lastManualSelection
+        }
+
         return (argUris as? List<String>) ?: emptyList()
     }
 
-    private fun sendToolResult(resultJsonString: String, toolCallId: String) {
+    private fun sendToolResult(resultJsonString: String, toolCallId: String, base64Images: List<String>? = null) {
         viewModelScope.launch {
             setStatus(AgentStatus.Loading("Sending result..."))
             val toolResult = ToolResult(toolCallId = toolCallId, content = resultJsonString)
-            val request = AgentRequest(sessionId = currentSessionId, userInput = null, toolResult = toolResult)
+            val request = AgentRequest(sessionId = currentSessionId, userInput = null, toolResult = toolResult, base64Images = base64Images)
             handleAgentRequest(request)
         }
     }
@@ -204,9 +242,34 @@ class AgentViewModel(
         _uiState.update { it.copy(currentStatus = newStatus) }
     }
 
-    // --------------------------------------------------------------------------
-    // UPDATED TOOL EXECUTION LOGIC
-    // --------------------------------------------------------------------------
+    private suspend fun executeDescribeImages(toolCall: ToolCall) {
+        val actOnLast = toolCall.args["act_on_last_search_results"] as? Boolean ?: false
+        val useSelection = toolCall.args["use_current_selection"] as? Boolean ?: false
+        val question = toolCall.args["question"] as? String ?: "Describe these images"
+
+        val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"], actOnLast, useSelection)
+
+        if (uris.isEmpty()) {
+            sendToolResult(gson.toJson(mapOf("error" to "No images found to describe.")), toolCall.id)
+            return
+        }
+
+        val urisToAnalyze = uris.take(5)
+        setStatus(AgentStatus.Loading("Analyzing visual content..."))
+
+        val base64List = ImageHelper.encodeImages(application, urisToAnalyze)
+
+        if (base64List.isEmpty()) {
+            sendToolResult(gson.toJson(mapOf("error" to "Failed to read images.")), toolCall.id)
+        } else {
+            sendToolResult(
+                resultJsonString = gson.toJson(mapOf("status" to "Images provided for analysis", "count" to base64List.size, "question" to question)),
+                toolCallId = toolCall.id,
+                base64Images = base64List
+            )
+        }
+    }
+
     private suspend fun executeLocalTool(toolCall: ToolCall): Any? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
             (toolCall.name == "delete_photos" || toolCall.name == "move_photos_to_album")) {
@@ -219,91 +282,63 @@ class AgentViewModel(
                     val query = toolCall.args["query"] as? String ?: ""
                     val startDateStr = toolCall.args["start_date"] as? String
                     val endDateStr = toolCall.args["end_date"] as? String
-                    val location = toolCall.args["location"] as? String // <--- NEW
+                    val location = toolCall.args["location"] as? String
                     val peopleNames = toolCall.args["people"] as? List<String>
 
                     var candidateUris: Set<String>? = null
 
-                    // 1. Filter by People (The "Me" Logic)
                     if (!peopleNames.isNullOrEmpty()) {
                         val personIds = mutableListOf<String>()
                         for (name in peopleNames) {
-                            // Handle "me", "my", "myself" mapping
                             val targetName = if (name.lowercase() in listOf("me", "my", "myself")) "Me" else name
-
-                            // Find person by name (case-insensitive search is better, but exact for now)
                             val person = personDao.getPersonByName(targetName)
-                            if (person != null) {
-                                personIds.add(person.id)
-                            }
+                            if (person != null) personIds.add(person.id)
                         }
-
                         if (personIds.isNotEmpty()) {
-                            // Get all photos linked to these people
-                            // We need a DAO method for this. See Step 2 below.
-                            val urisWithPeople = personDao.getUrisForPeople(personIds)
-                            candidateUris = urisWithPeople.toSet()
+                            candidateUris = personDao.getUrisForPeople(personIds).toSet()
                         } else {
-                            // People were asked for, but none found -> Return empty result immediately
                             addMessage(ChatMessage(text = "I couldn't find anyone named ${peopleNames.joinToString()}.", sender = Sender.AGENT))
                             return mapOf("photos_found" to 0)
                         }
                     }
 
-
                     var dateFilterUris: Set<String>? = null
-
-                    // 1. Apply Date Filter
                     if (startDateStr != null && endDateStr != null) {
                         try {
                             val startMillis = LocalDate.parse(startDateStr).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                             val endMillis = LocalDate.parse(endDateStr).atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                            val urisList = galleryTools.getPhotosInDateRange(startMillis, endMillis)
-                            dateFilterUris = urisList.toSet()
-                        } catch (e: Exception) { Log.e(TAG, "Date error", e) }
+                            dateFilterUris = galleryTools.getPhotosInDateRange(startMillis, endMillis).toSet()
+                        } catch (e: Exception) { }
                     }
 
                     val foundUris = withContext(Dispatchers.IO) {
-                        val allImageEmbeddings = imageEmbeddingDao.getAllEmbeddings()
+                        var candidates = imageEmbeddingDao.getAllEmbeddings()
+                        if (candidateUris != null) candidates = candidates.filter { candidateUris.contains(it.uri) }
+                        if (dateFilterUris != null) candidates = candidates.filter { dateFilterUris.contains(it.uri) }
+                        if (!location.isNullOrBlank()) candidates = candidates.filter { it.location?.contains(location, ignoreCase = true) == true }
 
-                        // 2. Apply Filters (Date & Location)
-                        var candidates = allImageEmbeddings
-
-                        if (dateFilterUris != null) {
-                            candidates = candidates.filter { dateFilterUris.contains(it.uri) }
-                        }
-
-                        // --- LOCATION FILTER ---
-                        if (!location.isNullOrBlank()) {
-                            candidates = candidates.filter {
-                                it.location?.contains(location, ignoreCase = true) == true
-                            }
-                        }
-                        // -----------------------
-
-                        // 3. Semantic Search (if query exists)
                         if (query.isNotBlank()) {
                             val tokens = clipTokenizer.tokenize(query)
                             val textEmbedding = textEncoder.encode(tokens)
-
                             candidates.mapNotNull {
                                 val sim = SimilarityUtil.cosineSimilarity(textEmbedding, it.embedding)
                                 if (sim > 0.2f) SearchResult(it.uri, sim) else null
                             }.sortedByDescending { it.similarity }.map { it.uri }
                         } else {
-                            // If no query, just return the filtered list (up to 100 to prevent overload)
                             candidates.take(100).map { it.uri }
                         }
                     }
 
+                    lastSearchResults = foundUris
+
                     if (foundUris.isEmpty()) {
-                        addMessage(ChatMessage(text = "I couldn't find any photos matching those criteria.", sender= Sender.AGENT))
+                        addMessage(ChatMessage(text = "I couldn't find any matching photos.", sender= Sender.AGENT))
+                        mapOf("photos_found" to 0)
                     } else {
                         addMessage(ChatMessage(text = "Found ${foundUris.size} photos.", sender = Sender.AGENT, imageUris = foundUris, hasSelectionPrompt = true))
+                        mapOf("photos_found" to foundUris.size, "uris" to foundUris.take(5))
                     }
-                    mapOf("photos_found" to foundUris.size)
                 }
-                // ... (Other cases match your original file) ...
                 "scan_for_cleanup" -> {
                     val duplicates = cleanupManager.findDuplicates()
                     if (duplicates.isEmpty()) {
@@ -312,11 +347,15 @@ class AgentViewModel(
                     } else {
                         _uiState.update { it.copy(cleanupGroups = duplicates) }
                         addMessage(ChatMessage(text = "Found duplicates. Tap to review.", sender = Sender.AGENT, isCleanupPrompt = true))
-                        mapOf("found_sets" to duplicates.size)
+                        val allDuplicateUris = duplicates.flatMap { it.duplicateUris }.take(5)
+                        mapOf("found_sets" to duplicates.size, "uris" to allDuplicateUris)
                     }
                 }
                 "delete_photos" -> {
-                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
+                    val actOnLast = toolCall.args["act_on_last_search_results"] as? Boolean ?: false
+                    val useSelection = toolCall.args["use_current_selection"] as? Boolean ?: false
+                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"], actOnLast, useSelection)
+
                     val intentSender = galleryTools.createDeleteIntentSender(uris)
                     if (intentSender != null) {
                         pendingToolCallId = toolCall.id
@@ -326,7 +365,10 @@ class AgentViewModel(
                     } else mapOf("error" to "Failed")
                 }
                 "move_photos_to_album" -> {
-                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
+                    val actOnLast = toolCall.args["act_on_last_search_results"] as? Boolean ?: false
+                    val useSelection = toolCall.args["use_current_selection"] as? Boolean ?: false
+                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"], actOnLast, useSelection)
+
                     val intentSender = galleryTools.createWriteIntentSender(uris)
                     if (intentSender != null) {
                         pendingToolCallId = toolCall.id
@@ -336,9 +378,13 @@ class AgentViewModel(
                     } else mapOf("error" to "Failed")
                 }
                 "create_collage" -> {
-                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
+                    val actOnLast = toolCall.args["act_on_last_search_results"] as? Boolean ?: false
+                    val useSelection = toolCall.args["use_current_selection"] as? Boolean ?: false
+                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"], actOnLast, useSelection)
                     val title = toolCall.args["title"] as? String ?: "My Collage"
-                    val newCollageUri = galleryTools.createCollage(uris, title)
+                    val collageUris = uris.take(4)
+
+                    val newCollageUri = galleryTools.createCollage(collageUris, title)
                     val message = "I've created the collage '$title'."
                     val imageList = if (newCollageUri != null) listOf(newCollageUri) else null
                     addMessage(ChatMessage(text = message, sender= Sender.AGENT, imageUris = imageList, hasSelectionPrompt = true))
@@ -346,7 +392,9 @@ class AgentViewModel(
                     newCollageUri
                 }
                 "apply_filter" -> {
-                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
+                    val actOnLast = toolCall.args["act_on_last_search_results"] as? Boolean ?: false
+                    val useSelection = toolCall.args["use_current_selection"] as? Boolean ?: false
+                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"], actOnLast, useSelection)
                     val filterName = toolCall.args["filter_name"] as? String ?: "grayscale"
                     val newImageUris = galleryTools.applyFilter(uris, filterName)
                     val message = "I've applied the '$filterName' filter."
@@ -355,7 +403,8 @@ class AgentViewModel(
                     newImageUris
                 }
                 "get_photo_metadata" -> {
-                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"])
+                    val useSelection = toolCall.args["use_current_selection"] as? Boolean ?: false
+                    val uris = getUrisFromArgsOrSelection(toolCall.args["photo_uris"], false, useSelection)
                     val metadataSummary = galleryTools.getPhotoMetadata(uris)
                     mapOf("metadata_summary" to metadataSummary)
                 }
@@ -369,13 +418,13 @@ class AgentViewModel(
     }
 
     fun clearChat() {
-        // Reset messages to empty, reset session ID to start fresh context
         currentSessionId = UUID.randomUUID().toString()
+        lastSearchResults = emptyList()
+        lastManualSelection = emptyList()
         _uiState.update {
             it.copy(
                 messages = emptyList(),
                 currentStatus = AgentStatus.Idle,
-                // Optionally clear selection too if desired
                 selectedImageUris = emptySet(),
                 cleanupGroups = emptyList()
             )

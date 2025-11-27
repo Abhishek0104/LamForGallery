@@ -27,7 +27,6 @@ class GalleryTools(private val context: Context) {
     private val resolver: ContentResolver = context.contentResolver
     private val TAG = "GalleryTools"
 
-    // --- NEW: Unified Data Class ---
     data class ImageInfo(
         val location: String? = null,
         val dateTaken: Long = 0L,
@@ -36,36 +35,24 @@ class GalleryTools(private val context: Context) {
         val cameraModel: String? = null
     )
 
-    /**
-     * Extracts ALL metadata (Location, Date, Dims, Camera) in one go.
-     */
     suspend fun extractImageInfo(uriString: String): ImageInfo {
         return withContext(Dispatchers.IO) {
             try {
                 resolver.openInputStream(Uri.parse(uriString))?.use { inputStream ->
                     val exif = ExifInterface(inputStream)
 
-                    // 1. Location
                     var location: String? = null
                     val latLong = exif.latLong
                     if (latLong != null) {
                         location = reverseGeocode(latLong[0], latLong[1])
                     }
 
-                    // 2. Date
-                    // Try standard DATE_TAKEN tag, fallback to file modified if needed (simplified here)
                     val dateString = exif.getAttribute(ExifInterface.TAG_DATETIME)
-                    // Parsing date string manually is complex, so often relying on MediaStore
-                    // query is safer for date, but let's grab simple width/height/model here.
-                    // Note: For robust Date, we usually query MediaStore columns.
-                    // But let's get what we can from Exif for now.
                     val dateTaken = parseExifDate(dateString)
 
-                    // 3. Dimensions
                     val width = exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
                     val height = exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0)
 
-                    // 4. Camera
                     val make = exif.getAttribute(ExifInterface.TAG_MAKE) ?: ""
                     val model = exif.getAttribute(ExifInterface.TAG_MODEL) ?: ""
                     val cameraModel = if (make.isNotBlank() || model.isNotBlank()) "$make $model".trim() else null
@@ -75,13 +62,12 @@ class GalleryTools(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "Error reading metadata for $uriString", e)
             }
-            ImageInfo() // Return empty if failed
+            ImageInfo()
         }
     }
 
     private fun parseExifDate(dateString: String?): Long {
         if (dateString == null) return System.currentTimeMillis()
-        // Exif format is usually "yyyy:MM:dd HH:mm:ss"
         return try {
             val sdf = java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
             sdf.parse(dateString)?.time ?: System.currentTimeMillis()
@@ -90,7 +76,6 @@ class GalleryTools(private val context: Context) {
         }
     }
 
-    // --- HELPER: Reverse Geocoding (Same as before) ---
     private fun reverseGeocode(lat: Double, lon: Double): String? {
         return try {
             val geocoder = Geocoder(context, Locale.getDefault())
@@ -116,10 +101,6 @@ class GalleryTools(private val context: Context) {
             else -> null
         }
     }
-
-    // --- EXISTING METHODS (Search, Filter, Collage, etc.) ---
-    // (Keep the rest of your file exactly as it was in the previous step,
-    //  including the fixed createCollage method)
 
     suspend fun searchPhotos(query: String): List<String> {
         val photoUris = mutableListOf<String>()
@@ -187,14 +168,29 @@ class GalleryTools(private val context: Context) {
         }
     }
 
-    private fun loadBitmapFromUri(uriString: String): Bitmap? {
+    // --- FIX: Add target size for downsampling ---
+    private fun loadBitmapFromUri(uriString: String, targetWidth: Int = -1, targetHeight: Int = -1): Bitmap? {
         return try {
             val uri = Uri.parse(uriString)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val source = ImageDecoder.createSource(resolver, uri)
-                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                     decoder.isMutableRequired = true
                     decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+
+                    // Downsample if targets provided
+                    if (targetWidth > 0 && targetHeight > 0) {
+                        val size = info.size
+                        var sampleSize = 1
+                        if (size.width > targetWidth || size.height > targetHeight) {
+                            val halfHeight = size.height / 2
+                            val halfWidth = size.width / 2
+                            while ((halfHeight / sampleSize) >= targetHeight && (halfWidth / sampleSize) >= targetWidth) {
+                                sampleSize *= 2
+                            }
+                        }
+                        decoder.setTargetSampleSize(sampleSize)
+                    }
                 }
             } else {
                 @Suppress("DEPRECATION")
@@ -216,7 +212,7 @@ class GalleryTools(private val context: Context) {
         return withContext(Dispatchers.IO) {
             val newImageUris = mutableListOf<String>()
             for (uriString in photoUris) {
-                val originalBitmap = loadBitmapFromUri(uriString)
+                val originalBitmap = loadBitmapFromUri(uriString) // Load full size for filters, or maybe downsample slightly?
                 if (originalBitmap == null) continue
 
                 try {
@@ -239,15 +235,23 @@ class GalleryTools(private val context: Context) {
         if (photoUris.isEmpty()) throw Exception("No photos provided.")
         return withContext(Dispatchers.IO) {
             try {
-                val bitmaps = photoUris.mapNotNull { loadBitmapFromUri(it) }
-                if (bitmaps.isEmpty()) throw Exception("Could not load bitmaps.")
-                val count = bitmaps.size
+                // 1. Determine Grid Dimensions
+                val count = photoUris.size
                 val cols = if (count <= 1) 1 else 2
                 val rows = ceil(count.toDouble() / cols).toInt()
-                val cellWidth = 1080 / cols
-                val cellHeight = 1080 / cols
                 val finalWidth = 1080
+                val cellWidth = finalWidth / cols
+                val cellHeight = cellWidth // Square cells
                 val finalHeight = rows * cellHeight
+
+                // 2. Load Bitmaps with DOWNSAMPLING (OOM Fix)
+                val bitmaps = photoUris.mapNotNull {
+                    loadBitmapFromUri(it, targetWidth = cellWidth, targetHeight = cellHeight)
+                }
+
+                if (bitmaps.isEmpty()) throw Exception("Could not load bitmaps.")
+
+                // 3. Draw Collage
                 val collageBitmap = Bitmap.createBitmap(finalWidth, finalHeight, Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(collageBitmap)
                 canvas.drawColor(android.graphics.Color.WHITE)
@@ -263,8 +267,9 @@ class GalleryTools(private val context: Context) {
                     val destRect = Rect(left, top, right, bottom)
                     val srcRect = getCenterCropRect(bitmap.width, bitmap.height)
                     canvas.drawBitmap(bitmap, srcRect, destRect, null)
-                    bitmap.recycle()
+                    bitmap.recycle() // Release memory immediately
                 }
+
                 val newUri = saveBitmapToMediaStore(collageBitmap, title, "Pictures/Stories")
                 collageBitmap.recycle()
                 newUri.toString()

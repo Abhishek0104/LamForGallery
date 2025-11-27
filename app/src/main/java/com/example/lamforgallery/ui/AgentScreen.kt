@@ -21,7 +21,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DeleteSweep // --- NEW ICON
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material3.*
@@ -49,7 +49,6 @@ fun AgentScreen(
     val coroutineScope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState()
 
-    // --- Bottom Sheet Logic ---
     if (uiState.isSelectionSheetOpen) {
         ModalBottomSheet(
             onDismissRequest = { viewModel.closeSelectionSheet() },
@@ -63,7 +62,6 @@ fun AgentScreen(
         }
     }
 
-    // --- Permission Logic ---
     LaunchedEffect(uiState.currentStatus) {
         val status = uiState.currentStatus
         if (status is AgentStatus.RequiresPermission) {
@@ -71,7 +69,6 @@ fun AgentScreen(
         }
     }
 
-    // --- Scroll Logic ---
     LaunchedEffect(uiState.messages.size) {
         if (uiState.messages.isNotEmpty()) {
             listState.animateScrollToItem(uiState.messages.size - 1)
@@ -89,7 +86,6 @@ fun AgentScreen(
                     )
                 },
                 actions = {
-                    // --- NEW: Clear Chat Button ---
                     IconButton(onClick = { viewModel.clearChat() }) {
                         Icon(
                             imageVector = Icons.Default.DeleteSweep,
@@ -107,7 +103,8 @@ fun AgentScreen(
             ChatInputBar(
                 status = uiState.currentStatus,
                 selectionCount = uiState.selectedImageUris.size,
-                onSend = { viewModel.sendUserInput(it) }
+                onSend = { viewModel.sendUserInput(it) },
+                onClearSelection = { viewModel.clearSelection() }
             )
         }
     ) { paddingValues ->
@@ -179,7 +176,6 @@ fun AgentScreen(
     }
 }
 
-// ... (ChatMessageItem, MediaGridPreview, etc. remain exactly the same as before)
 @Composable
 fun ChatMessageItem(
     message: ChatMessage,
@@ -406,7 +402,7 @@ fun SelectablePhotoItem(uri: String, isSelected: Boolean, onToggle: () -> Unit) 
 }
 
 @Composable
-fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> Unit) {
+fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> Unit, onClearSelection: () -> Unit) {
     var inputText by remember { mutableStateOf("") }
     val isEnabled = status is AgentStatus.Idle
 
@@ -424,7 +420,7 @@ fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> U
                     modifier = Modifier
                         .padding(bottom = 8.dp)
                         .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(8.dp))
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
                 ) {
                     Icon(Icons.Default.Image, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(8.dp))
@@ -433,6 +429,11 @@ fun ChatInputBar(status: AgentStatus, selectionCount: Int, onSend: (String) -> U
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
+                    Spacer(modifier = Modifier.weight(1f))
+                    // --- NEW: Clear Selection Button ---
+                    IconButton(onClick = onClearSelection, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Remove attachment", tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                    }
                 }
             }
 
