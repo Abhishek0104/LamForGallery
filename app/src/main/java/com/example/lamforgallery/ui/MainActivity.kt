@@ -280,9 +280,8 @@ fun AppShell(
         Box(modifier = Modifier.padding(paddingValues)) {
             when (selectedTab) {
                 "photos" -> {
-                    val agentSearchResults by agentViewModel.photoSearchResults.collectAsState()
                     val photosUiState by photosViewModel.uiState.collectAsState()
-                    val photoList = if (agentSearchResults.isNotEmpty()) agentSearchResults else photosUiState.photos
+                    val photoList = photosUiState.photos
 
                     PhotosScreen(
                         photosViewModel = photosViewModel,
