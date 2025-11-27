@@ -14,7 +14,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
-import androidx.compose.material.icons.filled.Face // --- NEW ICON
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.ImageSearch
 import androidx.compose.material.icons.filled.PhotoAlbum
@@ -45,7 +45,6 @@ class MainActivity : ComponentActivity() {
     private val albumsViewModel: AlbumsViewModel by viewModels { factory }
     private val embeddingViewModel: EmbeddingViewModel by viewModels { factory }
     private val photoViewerViewModel: PhotoViewerViewModel by viewModels { factory }
-    // --- NEW ---
     private val peopleViewModel: PeopleViewModel by viewModels { factory }
 
     private val permissionToRequest = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -90,7 +89,7 @@ class MainActivity : ComponentActivity() {
                             albumsViewModel = albumsViewModel,
                             embeddingViewModel = embeddingViewModel,
                             photoViewerViewModel = photoViewerViewModel,
-                            peopleViewModel = peopleViewModel, // --- Pass it ---
+                            peopleViewModel = peopleViewModel,
                             onLaunchPermissionRequest = { intentSender, type ->
                                 currentPermissionType = type
                                 permissionRequestLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
@@ -116,6 +115,7 @@ class MainActivity : ComponentActivity() {
     private fun loadAllViewModels() {
         photosViewModel.loadPhotos()
         albumsViewModel.loadAlbums()
+        // Initialize other view models if needed
     }
 }
 
@@ -127,7 +127,7 @@ fun AppNavigationHost(
     albumsViewModel: AlbumsViewModel,
     embeddingViewModel: EmbeddingViewModel,
     photoViewerViewModel: PhotoViewerViewModel,
-    peopleViewModel: PeopleViewModel, // --- NEW PARAM ---
+    peopleViewModel: PeopleViewModel,
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit
 ) {
     val navController = rememberNavController()
@@ -140,7 +140,7 @@ fun AppNavigationHost(
                 photosViewModel = photosViewModel,
                 albumsViewModel = albumsViewModel,
                 embeddingViewModel = embeddingViewModel,
-                peopleViewModel = peopleViewModel, // --- Pass it ---
+                peopleViewModel = peopleViewModel,
                 selectedTab = selectedTab,
                 onTabSelected = { selectedTab = it },
                 onAlbumClick = { encodedName -> navController.navigate("album_detail/$encodedName") },
@@ -154,7 +154,8 @@ fun AppNavigationHost(
                     photoViewerViewModel.setPhotoList(currentList, uri)
                     navController.navigate("view_photo")
                 },
-                onNavigateToCleanup = { navController.navigate("cleanup_review") }
+                onNavigateToCleanup = { navController.navigate("cleanup_review") },
+                onPersonClick = { personId -> navController.navigate("person_detail/$personId") }
             )
         }
 
@@ -170,6 +171,26 @@ fun AppNavigationHost(
                 onNavigateBack = { navController.popBackStack() },
                 onPhotoClick = { uri ->
                     val currentList = albumDetailViewModel.uiState.value.photos
+                    photoViewerViewModel.setPhotoList(currentList, uri)
+                    navController.navigate("view_photo")
+                }
+            )
+        }
+
+        // --- NEW: Person Detail Screen Route ---
+        composable(
+            route = "person_detail/{personId}",
+            arguments = listOf(navArgument("personId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val personId = backStackEntry.arguments?.getString("personId") ?: return@composable
+            val personDetailViewModel: PersonDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = factory)
+
+            PersonDetailScreen(
+                personId = personId,
+                viewModel = personDetailViewModel,
+                onNavigateBack = { navController.popBackStack() },
+                onPhotoClick = { uri ->
+                    val currentList = personDetailViewModel.uiState.value.photos
                     photoViewerViewModel.setPhotoList(currentList, uri)
                     navController.navigate("view_photo")
                 }
@@ -211,11 +232,12 @@ fun AppShell(
     photosViewModel: PhotosViewModel,
     albumsViewModel: AlbumsViewModel,
     embeddingViewModel: EmbeddingViewModel,
-    peopleViewModel: PeopleViewModel, // --- NEW PARAM ---
+    peopleViewModel: PeopleViewModel,
     selectedTab: String,
     onTabSelected: (String) -> Unit,
     onAlbumClick: (String) -> Unit,
     onPhotoClick: (String) -> Unit,
+    onPersonClick: (String) -> Unit, // --- New Callback ---
     onLaunchPermissionRequest: (IntentSender, PermissionType) -> Unit,
     onNavigateToCleanup: () -> Unit
 ) {
@@ -236,7 +258,6 @@ fun AppShell(
                     icon = { Icon(Icons.Default.PhotoAlbum, "Albums") },
                     label = { Text("Albums") }
                 )
-                // --- NEW PEOPLE TAB ---
                 NavigationBarItem(
                     selected = selectedTab == "people",
                     onClick = { onTabSelected("people") },
@@ -266,7 +287,10 @@ fun AppShell(
                     onPhotoClick = onPhotoClick
                 )
                 "albums" -> AlbumsScreen(viewModel = albumsViewModel, onAlbumClick = onAlbumClick)
-                "people" -> PeopleScreen(viewModel = peopleViewModel) // --- Show People Screen ---
+                "people" -> PeopleScreen(
+                    viewModel = peopleViewModel,
+                    onPersonClick = onPersonClick
+                )
                 "agent" -> AgentScreen(
                     viewModel = agentViewModel,
                     onLaunchPermissionRequest = onLaunchPermissionRequest,

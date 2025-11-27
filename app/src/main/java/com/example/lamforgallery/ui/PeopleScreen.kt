@@ -9,30 +9,28 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import com.example.lamforgallery.database.Person
 import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
+import com.example.lamforgallery.database.Person
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PeopleScreen(
-    viewModel: PeopleViewModel
+    viewModel: PeopleViewModel,
+    onPersonClick: (String) -> Unit // Changed: Pass ID instead of handling rename internally
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    var personToRename by remember { mutableStateOf<Person?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.loadPeople()
@@ -59,21 +57,9 @@ fun PeopleScreen(
                 modifier = Modifier.padding(padding)
             ) {
                 items(uiState.people) { person ->
-                    PersonItem(person = person, onClick = { personToRename = person })
+                    PersonItem(person = person, onClick = { onPersonClick(person.id) })
                 }
             }
-        }
-
-        // Rename Dialog
-        if (personToRename != null) {
-            RenamePersonDialog(
-                person = personToRename!!,
-                onDismiss = { personToRename = null },
-                onConfirm = { newName ->
-                    viewModel.updatePersonName(personToRename!!, newName)
-                    personToRename = null
-                }
-            )
         }
     }
 }
@@ -82,7 +68,10 @@ fun PeopleScreen(
 fun PersonItem(person: Person, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable { onClick() }
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onClick() }
+            .padding(8.dp)
     ) {
         Box(
             modifier = Modifier
@@ -131,32 +120,4 @@ fun PersonItem(person: Person, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
         )
     }
-}
-
-@Composable
-fun RenamePersonDialog(person: Person, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
-    var text by remember { mutableStateOf(person.name) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Who is this?") },
-        text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                label = { Text("Name") },
-                singleLine = true
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(text) }) {
-                Text("Save")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        }
-    )
 }
