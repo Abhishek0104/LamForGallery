@@ -1,6 +1,5 @@
 package com.example.lamforgallery.ui
 
-
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -15,63 +14,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import com.example.lamforgallery.database.Person
-import com.example.lamforgallery.database.PersonDao
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-
-// --- ViewModel ---
-
-data class PersonDetailUiState(
-    val person: Person? = null,
-    val photos: List<String> = emptyList(),
-    val isLoading: Boolean = false
-)
-
-class PersonDetailViewModel(
-    private val personDao: PersonDao
-) : ViewModel() {
-
-    private val _uiState = MutableStateFlow(PersonDetailUiState())
-    val uiState: StateFlow<PersonDetailUiState> = _uiState.asStateFlow()
-
-    fun loadPerson(personId: String) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true) }
-
-            val person = personDao.getPersonById(personId)
-            val photos = if (person != null) {
-                personDao.getUrisForPeople(listOf(personId))
-            } else emptyList()
-
-            _uiState.update {
-                it.copy(
-                    isLoading = false,
-                    person = person,
-                    photos = photos
-                )
-            }
-        }
-    }
-
-    fun renamePerson(newName: String) {
-        val currentPerson = _uiState.value.person ?: return
-        viewModelScope.launch {
-            personDao.updateName(currentPerson.id, newName)
-            // Reload to reflect changes
-            val updatedPerson = personDao.getPersonById(currentPerson.id)
-            _uiState.update { it.copy(person = updatedPerson) }
-        }
-    }
-}
-
-// --- Screen ---
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,7 +26,7 @@ fun PersonDetailScreen(
     onPhotoClick: (String) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    var showRenameDialog by remember { mutableStateOf(false) }
+    var showEditDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(personId) {
         viewModel.loadPerson(personId)
@@ -91,15 +35,25 @@ fun PersonDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(uiState.person?.name ?: "Loading...") },
+                title = {
+                    Column {
+                        Text(uiState.person?.name ?: "Loading...")
+                        if (!uiState.person?.relation.isNullOrEmpty()) {
+                            Text(
+                                text = "Relation: ${uiState.person?.relation}",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showRenameDialog = true }) {
-                        Icon(Icons.Default.Edit, contentDescription = "Rename Person")
+                    IconButton(onClick = { showEditDialog = true }) {
+                        Icon(Icons.Default.Edit, contentDescription = "Edit Person")
                     }
                 }
             )
@@ -139,13 +93,14 @@ fun PersonDetailScreen(
             }
         }
 
-        if (showRenameDialog && uiState.person != null) {
-            RenameDialog(
+        if (showEditDialog && uiState.person != null) {
+            EditPersonDialog(
                 currentName = uiState.person!!.name,
-                onDismiss = { showRenameDialog = false },
-                onConfirm = { newName ->
-                    viewModel.renamePerson(newName)
-                    showRenameDialog = false
+                currentRelation = uiState.person!!.relation,
+                onDismiss = { showEditDialog = false },
+                onConfirm = { name, relation ->
+                    viewModel.updatePersonDetails(name, relation)
+                    showEditDialog = false
                 }
             )
         }
@@ -153,22 +108,37 @@ fun PersonDetailScreen(
 }
 
 @Composable
-fun RenameDialog(currentName: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
-    var text by remember { mutableStateOf(currentName) }
+fun EditPersonDialog(
+    currentName: String,
+    currentRelation: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String?) -> Unit
+) {
+    var name by remember { mutableStateOf(currentName) }
+    var relation by remember { mutableStateOf(currentRelation ?: "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Rename Person") },
+        title = { Text("Edit Details") },
         text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                label = { Text("Name") },
-                singleLine = true
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = relation,
+                    onValueChange = { relation = it },
+                    label = { Text("Relation (e.g. Daughter)") },
+                    singleLine = true,
+                    placeholder = { Text("Optional") }
+                )
+            }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(text) }) {
+            TextButton(onClick = { onConfirm(name, relation) }) {
                 Text("Save")
             }
         },

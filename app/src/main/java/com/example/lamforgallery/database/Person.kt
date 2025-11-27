@@ -22,19 +22,23 @@ data class Person(
     val faceLeft: Float = 0f,
     val faceTop: Float = 0f,
     val faceRight: Float = 0f,
-    val faceBottom: Float = 0f
+    val faceBottom: Float = 0f,
+
+    // --- NEW: Relation Field (e.g., "Daughter", "Father") ---
+    val relation: String? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
         other as Person
-        return id == other.id && name == other.name && embedding.contentEquals(other.embedding)
+        // Added relation to equals check
+        return id == other.id && name == other.name && relation == other.relation && embedding.contentEquals(other.embedding)
     }
 
-    override fun hashCode(): Int = id.hashCode() + name.hashCode() + embedding.contentHashCode()
+    override fun hashCode(): Int = id.hashCode() + name.hashCode() + (relation?.hashCode() ?: 0) + embedding.contentHashCode()
 }
 
-// --- NEW: UI Model for People List (Lightweight & Correct Count) ---
+// --- Updated UI Model ---
 data class PersonUiModel(
     val id: String,
     val name: String,
@@ -43,5 +47,6 @@ data class PersonUiModel(
     val faceTop: Float,
     val faceRight: Float,
     val faceBottom: Float,
-    val imageCount: Int
+    val imageCount: Int,
+    val relation: String? // Added relation here too
 )

@@ -84,17 +84,13 @@ class AgentViewModel(
     private val _galleryDidChange = MutableSharedFlow<Unit>()
     val galleryDidChange: SharedFlow<Unit> = _galleryDidChange.asSharedFlow()
 
-    // --- STATE CACHE ---
     private var lastSearchResults: List<String> = emptyList()
-    // --- NEW: Cache for manual selection to persist context after UI clears ---
     private var lastManualSelection: List<String> = emptyList()
 
     private data class SearchResult(val uri: String, val similarity: Float)
 
     fun toggleImageSelection(uri: String) { _uiState.update { s -> val n = s.selectedImageUris.toMutableSet(); if(n.contains(uri)) n.remove(uri) else n.add(uri); s.copy(selectedImageUris = n) } }
     fun setExternalSelection(uris: List<String>) { _uiState.update { it.copy(selectedImageUris = uris.toSet()) } }
-
-    // --- NEW: Explicit Clear Function ---
     fun clearSelection() { _uiState.update { it.copy(selectedImageUris = emptySet()) } }
 
     fun openSelectionSheet(uris: List<String>) { _uiState.update { it.copy(isSelectionSheetOpen = true, selectionSheetUris = uris) } }
@@ -105,15 +101,8 @@ class AgentViewModel(
         val currentState = _uiState.value
         if (currentState.currentStatus !is AgentStatus.Idle) return
 
-        // 1. Capture the selection
         val selectedUris = currentState.selectedImageUris.toList()
-
-        // 2. Update the "Last Manual Selection" cache so the agent can use it
-        if (selectedUris.isNotEmpty()) {
-            lastManualSelection = selectedUris
-        }
-
-        // 3. Clear the UI immediately (The Fix)
+        if (selectedUris.isNotEmpty()) lastManualSelection = selectedUris
         _uiState.update { it.copy(selectedImageUris = emptySet()) }
 
         viewModelScope.launch {
@@ -214,11 +203,8 @@ class AgentViewModel(
         if (useLastSearch && lastSearchResults.isNotEmpty()) return lastSearchResults
 
         if (useCurrentSelection) {
-            // Priority 1: If user happens to have active selection on screen right now
             val active = _uiState.value.selectedImageUris.toList()
             if (active.isNotEmpty()) return active
-
-            // Priority 2: The selection they JUST sent (cached)
             if (lastManualSelection.isNotEmpty()) return lastManualSelection
         }
 
@@ -291,13 +277,22 @@ class AgentViewModel(
                         val personIds = mutableListOf<String>()
                         for (name in peopleNames) {
                             val targetName = if (name.lowercase() in listOf("me", "my", "myself")) "Me" else name
-                            val person = personDao.getPersonByName(targetName)
+
+                            // --- RELATIONSHIP LOOKUP LOGIC ---
+                            // 1. Try finding by Name
+                            var person = personDao.getPersonByName(targetName)
+
+                            // 2. If no name match, try finding by Relation (e.g., "daughter")
+                            if (person == null) {
+                                person = personDao.getPersonByRelation(targetName)
+                            }
+
                             if (person != null) personIds.add(person.id)
                         }
                         if (personIds.isNotEmpty()) {
                             candidateUris = personDao.getUrisForPeople(personIds).toSet()
                         } else {
-                            addMessage(ChatMessage(text = "I couldn't find anyone named ${peopleNames.joinToString()}.", sender = Sender.AGENT))
+                            addMessage(ChatMessage(text = "I couldn't find anyone named or related as ${peopleNames.joinToString()}.", sender = Sender.AGENT))
                             return mapOf("photos_found" to 0)
                         }
                     }

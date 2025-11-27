@@ -16,11 +16,9 @@ interface PersonDao {
     @Query("SELECT * FROM people")
     suspend fun getAllPeople(): List<Person>
 
-    // --- NEW: Get People with Image Count (Distinct URIs) ---
-    // This fixes the issue where faceCount counted detections (including collages/duplicates)
-    // instead of unique images.
+    // --- UPDATED: Fetch relation as well ---
     @Query("""
-        SELECT p.id, p.name, p.coverUri, p.faceLeft, p.faceTop, p.faceRight, p.faceBottom,
+        SELECT p.id, p.name, p.coverUri, p.faceLeft, p.faceTop, p.faceRight, p.faceBottom, p.relation,
         COUNT(DISTINCT ip.uri) as imageCount
         FROM people p
         LEFT JOIN image_people ip ON p.id = ip.personId
@@ -34,8 +32,13 @@ interface PersonDao {
     @Query("SELECT * FROM people WHERE name LIKE '%' || :name || '%' LIMIT 1")
     suspend fun getPersonByName(name: String): Person?
 
-    @Query("UPDATE people SET name = :newName WHERE id = :personId")
-    suspend fun updateName(personId: String, newName: String)
+    // --- NEW: Get Person by Relation ---
+    @Query("SELECT * FROM people WHERE relation LIKE '%' || :relation || '%' LIMIT 1")
+    suspend fun getPersonByRelation(relation: String): Person?
+
+    // --- NEW: Update both Name and Relation ---
+    @Query("UPDATE people SET name = :newName, relation = :newRelation WHERE id = :personId")
+    suspend fun updatePersonDetails(personId: String, newName: String, newRelation: String?)
 
     @Query("UPDATE people SET embedding = :newEmbeddingBytes, faceCount = :newCount WHERE id = :personId")
     suspend fun updateEmbedding(personId: String, newEmbeddingBytes: ByteArray, newCount: Int)
