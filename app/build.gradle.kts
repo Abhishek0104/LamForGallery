@@ -1,4 +1,5 @@
-import com.android.build.api.dsl.AaptOptions
+import java.util.Properties
+import java.io.FileInputStream
 
 plugins {
     alias(libs.plugins.android.application)
@@ -6,6 +7,13 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     id("com.google.devtools.ksp") version "2.1.0-1.0.29"
     kotlin("plugin.serialization") version "2.1.0"
+}
+
+// Load API key from local.properties
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { localProperties.load(it) }
 }
 
 android {
@@ -22,6 +30,8 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
+        buildConfigField("String", "GOOGLE_API_KEY", "\"${localProperties.getProperty("GOOGLE_API_KEY") ?: ""}\"")
     }
 
     buildTypes {
@@ -53,6 +63,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     sourceSets {
         getByName("main") {

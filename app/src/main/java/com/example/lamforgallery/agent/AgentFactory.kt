@@ -13,10 +13,11 @@ import ai.koog.prompt.executor.clients.google.GoogleLLMClient
 import ai.koog.prompt.executor.clients.google.GoogleModels
 import ai.koog.prompt.executor.llms.SingleLLMPromptExecutor
 import ai.koog.prompt.llm.LLModel
+import com.example.lamforgallery.BuildConfig
 import java.time.LocalDate
 
 object AgentFactory {
-    private const val API_KEY = "AIzaSyBcTCFJYFDOrHjnC9vAA4W2QEz6KWWvoZ4"
+    private val API_KEY = BuildConfig.GOOGLE_API_KEY
     
     fun getLLMClient(): GoogleLLMClient {
         return GoogleLLMClient(API_KEY)
