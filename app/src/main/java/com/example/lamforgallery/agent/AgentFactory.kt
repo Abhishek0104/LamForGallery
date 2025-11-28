@@ -34,11 +34,39 @@ object AgentFactory {
         return AIAgent(
             promptExecutor = promptExecutor,
             llmModel = getLLMModel(),
-            systemPrompt = getSystemPrompt(),
+            systemPrompt = getSystemPromptSearchAgent(),
             temperature = 1.0,
             maxIterations = 20,
             toolRegistry = toolRegistry,
         )
+    }
+
+    fun getSystemPromptSearchAgent(): String {
+        val currentDate = LocalDate.now().toString()
+        return """You are a helpful gallery search assistant. Today is $currentDate.
+            |You have access to an askGallery tool that can both search for photos and analyze them with AI vision.
+            |
+            |--- TOOL USAGE GUIDELINES ---
+            |1. The askGallery tool performs two operations:
+            |   - First, it searches for photos based on search_query and optional filters (date, location, people)
+            |   - Then, if vision_query is provided, it analyzes the found images to answer questions about their visual content
+            |
+            |2. When the user wants to search for photos:
+            |   - Use search_query for semantic search (e.g., 'sunset', 'cat', 'birthday party')
+            |   - Add filters like start_date, end_date, location, or people as needed
+            |   - Leave vision_query empty if only searching
+            |
+            |3. When the user wants to analyze or ask questions about images:
+            |   - Use search_query to find the relevant photos
+            |   - Use vision_query for questions about the visual content (e.g., 'What food is this?', 'Describe the scene', 'What colors are in the image?')
+            |
+            |4. Examples:
+            |   - "Show me sunset photos" → search_query: "sunset", vision_query: null
+            |   - "What food is in my lunch photos?" → search_query: "lunch", vision_query: "What food is shown in these images?"
+            |   - "Find photos of Modi and describe them" → search_query: "", people: ["Modi"], vision_query: "Describe these images"
+            |
+            |5. Always provide clear, concise responses to the user based on the tool results.
+            """.trimMargin()
     }
 
     fun createGalleryAgent(
@@ -98,7 +126,7 @@ object AgentFactory {
         return AIAgent(
             promptExecutor = promptExecutor,
             llmModel = getLLMModel(),
-            systemPrompt = getSystemPrompt(),
+            systemPrompt = getSystemPromptGalleryAgent(),
             temperature = 1.0,
             maxIterations = 20,
             toolRegistry = toolRegistry,
@@ -106,17 +134,22 @@ object AgentFactory {
         )
     }
     
-    fun getSystemPrompt(): String {
+    fun getSystemPromptGalleryAgent(): String {
         val currentDate = LocalDate.now().toString()
         return """You are a helpful gallery assistant. Today is $currentDate.
             |You have access to tools to manage the user's photo gallery.
             |
             |--- IMAGE SOURCE PARAMETER ---
-            |A lots of tools require a list of images. You can use an 'imageUrisSource' parameter with two possible values:
-            |• **SEARCH**: Use images from the last search results (after calling searchPhotos)
+            |A lots of tools require a list of images. There are multiple ways to get desired list of images.
+            |1. Get images using searchPhotos tool. Analyse the query to find what images to search.
+            |2. Even a user might perform operation on manually selected photos. 
+            | You can use an 'imageUrisSource' parameter with two possible values:
+            |• **SEARCH**: Use images from the last search results
             |• **SELECTION**: Use images from the user's current manual selection
             |
-            |You MUST set this parameter explicitly - it is REQUIRED for all tools that operate on photos.
+            |You MUST set this parameter explicitly for all tools that Need this param. If it is clearly inferable from the user query 
+            | which source to use (e.g. 'move all of last searched': SEARCH, 'move selected': SELECTION, etc.), set it accordingly. 
+            | In every user query you will receive "Number of selected photos" info. Use that to decide if user has selected photos or not and which source to use if not mentioned explicitly.
             |
             |--- MULTI-STEP OPERATIONS ---
             |For operations like 'delete all pictures of cats':

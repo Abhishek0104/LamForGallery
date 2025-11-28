@@ -3,29 +3,19 @@ package com.example.lamforgallery.tools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
-import ai.koog.prompt.dsl.prompt
-import ai.koog.prompt.message.AttachmentContent
-import ai.koog.prompt.message.ContentPart
 import android.content.IntentSender
 import android.os.Build
 import android.util.Log
 import android.content.Context
-import com.example.lamforgallery.agent.AgentFactory
 import com.example.lamforgallery.database.ImageEmbeddingDao
 import com.example.lamforgallery.database.PersonDao
 import com.example.lamforgallery.ml.ClipTokenizer
 import com.example.lamforgallery.ml.TextEncoder
 import com.example.lamforgallery.ui.PermissionType
 import com.example.lamforgallery.utils.CleanupManager
-import com.example.lamforgallery.utils.ImageHelper
-import com.example.lamforgallery.utils.SimilarityUtil
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
-import java.time.LocalDate
-import java.time.ZoneId
 
 /**
  * Enum to specify the source of image URIs for tool operations
@@ -94,65 +84,15 @@ class GalleryToolSet(
             val argsJson = Json.encodeToString(args)
             Log.d(TAG, "🔍 searchPhotos called with args: $argsJson")
 
-            var candidateUris: Set<String>? = null
+            val params = GalleryTools.SearchPhotosParams(
+                query = args.query,
+                startDate = args.start_date,
+                endDate = args.end_date,
+                location = args.location,
+                people = args.people
+            )
 
-            // Filter by people first
-            if (args.people.isNotEmpty()) {
-                val personIds = mutableListOf<String>()
-                for (name in args.people) {
-                    val targetName = if (name.lowercase() in listOf("me", "my", "myself")) "Me" else name
-                    val person = personDao.getPersonByName(targetName)
-                    if (person != null) personIds.add(person.id)
-                }
-                if (personIds.isNotEmpty()) {
-                    candidateUris = personDao.getUrisForPeople(personIds).toSet()
-                } else {
-                    onMessage("I couldn't find anyone named ${args.people.joinToString()}.", null, false, false)
-                    return """{"count": 0, "message": "No person found with name ${args.people.joinToString()}"}"""
-                }
-            }
-
-            // Filter by date range
-            var dateFilterUris: Set<String>? = null
-            if (args.start_date != null && args.end_date != null) {
-                try {
-                    val startMillis = LocalDate.parse(args.start_date).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                    val endMillis = LocalDate.parse(args.end_date).atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                    dateFilterUris = galleryTools.getPhotosInDateRange(startMillis, endMillis).toSet()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse date range", e)
-                }
-            }
-
-            // Perform semantic search with filters
-            val foundUris = withContext(Dispatchers.IO) {
-                var candidates = imageEmbeddingDao.getAllEmbeddings()
-                
-                // Apply filters
-                if (candidateUris != null) {
-                    candidates = candidates.filter { candidateUris.contains(it.uri) }
-                }
-                if (dateFilterUris != null) {
-                    candidates = candidates.filter { dateFilterUris.contains(it.uri) }
-                }
-                if (!args.location.isNullOrBlank()) {
-                    candidates = candidates.filter { 
-                        it.location?.contains(args.location, ignoreCase = true) == true 
-                    }
-                }
-
-                // Semantic search with CLIP if query provided
-                if (args.query.isNotBlank()) {
-                    val tokens = clipTokenizer.tokenize(args.query)
-                    val textEmbedding = textEncoder.encode(tokens)
-                    candidates.mapNotNull {
-                        val sim = SimilarityUtil.cosineSimilarity(textEmbedding, it.embedding)
-                        if (sim > 0.2f) SearchResult(it.uri, sim) else null
-                    }.sortedByDescending { it.similarity }.map { it.uri }
-                } else {
-                    candidates.take(100).map { it.uri }
-                }
-            }
+            val foundUris = galleryTools.searchPhotos(params)
 
             // Update search results cache
             onSearchResults(foundUris)
@@ -418,46 +358,11 @@ class GalleryToolSet(
                 return """{"error": "No images available from ${args.imageUrisSource} source"}"""
             }
 
-            // Limit to 5 images to avoid large payloads
-            val urisToAnalyze = uris.take(5)
-            
-            // Load images as base64 strings
-            val base64Images = ImageHelper.encodeImages(context, urisToAnalyze)
-            
-            if (base64Images.isEmpty()) {
-                return """{"error": "Failed to load images"}"""
-            }
-
-            // Create vision prompt with images
-            val client = AgentFactory.getLLMClient()
-            val visionPrompt = prompt("vision_analysis") {
-                system("You are a helpful assistant that analyzes images and answers questions about them.")
-                
-                user {
-                    +args.query
-                    
-                    // Add all base64 encoded images
-                    base64Images.forEach { base64Image ->
-                        image(
-                            ContentPart.Image(
-                                content = AttachmentContent.Binary.Base64(base64Image),
-                                format = "jpeg",
-                            )
-                        )
-                    }
-                }
-            }
-
-            // Execute the prompt and get response
-            val response = withContext(Dispatchers.IO) {
-                client.execute(prompt = visionPrompt, model = AgentFactory.getLLMModel())
-            }
-
-            val answer = response[0].content ?: "No response from vision model"
+            val answer = galleryTools.analyzeImages(uris, args.query)
             Log.d(TAG, "✅ Vision analysis complete: $answer")
             
             // Return the analysis result
-            """{"success": true, "answer": "${answer.replace("\"", "\\\"")}", "imageCount": ${base64Images.size}}"""
+            """{"success": true, "answer": "${answer.replace("\"", "\\\"")}", "imageCount": ${uris.take(5).size}}"""
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error in askGallery", e)
             """{"error": "Failed to analyze images: ${e.message}"}"""
