@@ -73,7 +73,8 @@ data class PhotosScreenState(
     val canLoadMore: Boolean = true,
     val page: Int = 0,
     val agentResponse: String = "",
-    val isAgentProcessing: Boolean = false
+    val isAgentProcessing: Boolean = false,
+    val hasSearched: Boolean = false
 )
 
 // --- ViewModel ---
@@ -96,13 +97,13 @@ class PhotosViewModel(
     private var lastSearchResults: List<String> = emptyList()
     private var lastManualSelection: List<String> = emptyList()
 
-    fun loadPhotos() {
-        if (_uiState.value.photos.isNotEmpty()) return // Don't reload if already loaded
+    fun loadPhotos(forceReload: Boolean = false) {
+        if (_uiState.value.photos.isNotEmpty() && !forceReload) return
         _uiState.value = PhotosScreenState()
         loadNextPage()
     }
 
-    fun clearPhotos() {
+    fun clearPhotosAndSearchState() {
         _uiState.value = PhotosScreenState()
     }
 
@@ -155,7 +156,7 @@ class PhotosViewModel(
         } catch (e: Exception) {
             Log.e(TAG, "Error in agent execution", e)
             val errorMsg = "Error: ${e.message}"
-            _uiState.update { it.copy(agentResponse = errorMsg, isAgentProcessing = false) }
+            _uiState.update { it.copy(agentResponse = errorMsg, isAgentProcessing = false, hasSearched = true) }
             errorMsg
         }
     }
@@ -166,8 +167,8 @@ class PhotosViewModel(
             galleryTools = galleryTools,
             onSearchResults = { uris -> 
                 lastSearchResults = uris
-                // Update photos to show search results
-                _uiState.update { it.copy(photos = uris, page = 1, canLoadMore = false) }
+                // Update photos to show search results and mark that a search has occurred
+                _uiState.update { it.copy(photos = uris, page = 1, canLoadMore = false, hasSearched = true) }
             },
             getLastSearchResults = { lastSearchResults }
         )
@@ -203,13 +204,15 @@ fun PhotosScreen(
         if (!isSelectionMode) selectedPhotos = emptySet()
     }
 
-    // When search is dismissed, reload the original photos
+    // When search is activated, clear photos. When dismissed, reload them.
     LaunchedEffect(isSearchActive) {
-        if (!isSearchActive) {
+        if (isSearchActive) {
+            // When search starts, clear the screen and reset search state
+            photosViewModel.clearPhotosAndSearchState()
+        } else {
+            // When search is cancelled, restore the main gallery view
             photosViewModel.clearAgentResponse()
-            if (photosUiState.photos.isEmpty()) {
-                photosViewModel.loadPhotos()
-            }
+            photosViewModel.loadPhotos(forceReload = true)
         }
     }
 
@@ -261,7 +264,9 @@ fun PhotosScreen(
             val isLoading = photosUiState.isLoading || photosUiState.isAgentProcessing
             if (photosToShow.isEmpty() && isLoading) {
                 CircularProgressIndicator()
-            } else if (photosToShow.isEmpty() && !isLoading) {
+            } else if (photosToShow.isEmpty() && !isLoading && photosUiState.hasSearched) {
+                Text("No photos found.")
+            } else if (photosToShow.isEmpty() && !isLoading && !isSearchActive) {
                 Text("No photos found in gallery.")
             } else {
                 LazyVerticalStaggeredGrid(

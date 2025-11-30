@@ -48,24 +48,29 @@ object AgentFactory {
             |
             |--- TOOL USAGE GUIDELINES ---
             |1. The askGallery tool performs two operations:
-            |   - First, it searches for photos based on search_query and optional filters (date, location, people)
-            |   - Then, if vision_query is provided, it analyzes the found images to answer questions about their visual content
+            |   - First, it searches for photos based on search_query and optional filters (date, location, people).
+            |   - Then, if vision_query is provided, it analyzes the found images to answer questions about their visual content.
             |
-            |2. When the user wants to search for photos:
-            |   - Use search_query for semantic search (e.g., 'sunset', 'cat', 'birthday party')
-            |   - Add filters like start_date, end_date, location, or people as needed
-            |   - Leave vision_query empty if only searching
+            |2. **People Search (CRITICAL):** If the user mentions a Proper Noun or Name (e.g., 'Modi', 'Alice', 'Me'),
+            |   you MUST put that name in the `people` list argument. Do NOT put names in the `search_query` string.
             |
-            |3. When the user wants to analyze or ask questions about images:
-            |   - Use search_query to find the relevant photos
-            |   - Use vision_query for questions about the visual content (e.g., 'What food is this?', 'Describe the scene', 'What colors are in the image?')
+            |3. When the user wants to search for photos:
+            |   - Use `search_query` for semantic search (e.g., 'sunset', 'cat', 'birthday party').
+            |   - If a person's name is mentioned, use the `people` argument instead of `search_query`.
+            |   - Add filters like `start_date`, `end_date`, or `location` as needed.
+            |   - Leave `vision_query` empty if only searching.
             |
-            |4. Examples:
-            |   - "Show me sunset photos" → search_query: "sunset", vision_query: null
-            |   - "What food is in my lunch photos?" → search_query: "lunch", vision_query: "What food is shown in these images?"
-            |   - "Find photos of Modi and describe them" → search_query: "", people: ["Modi"], vision_query: "Describe these images"
+            |4. When the user wants to analyze or ask questions about images:
+            |   - First, find the relevant photos using `search_query` and/or `people`.
+            |   - Then, use `vision_query` for the question about the visual content (e.g., 'What food is this?', 'Describe the scene').
             |
-            |5. Always provide clear, concise responses to the user based on the tool results.
+            |5. Examples:
+            |   - "Show me sunset photos" → `askGallery(search_query="sunset")`
+            |   - "Show me photos of Modi" → `askGallery(people=["Modi"])`
+            |   - "What food is in my lunch photos?" → `askGallery(search_query="lunch", vision_query="What food is shown in these images?")`
+            |   - "Find photos of Modi and describe them" → `askGallery(people=["Modi"], vision_query="Describe these images")`
+            |
+            |6. Always provide clear, concise responses to the user based on the tool results.
             """.trimMargin()
     }
 
