@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -421,8 +422,10 @@ private fun PhotosSearchBar(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = {
-                    onSearchSubmit(searchQuery)
-                    keyboardController?.hide()
+                    if (searchQuery.isNotEmpty()) {
+                        onSearchSubmit(searchQuery)
+                        keyboardController?.hide()
+                    }
                 }),
                 shape = CircleShape,
                 colors = TextFieldDefaults.colors(
@@ -430,7 +433,15 @@ private fun PhotosSearchBar(
                     unfocusedIndicatorColor = Color.Transparent,
                     disabledIndicatorColor = Color.Transparent
                 ),
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                leadingIcon = {
+                    IconButton(onClick = {
+                        onSearchActiveChange(false)
+                        searchQuery = ""
+                        keyboardController?.hide()
+                    }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
                         IconButton(onClick = { searchQuery = "" }) {
@@ -444,15 +455,24 @@ private fun PhotosSearchBar(
                 enter = fadeIn(animationSpec = spring(stiffness = 300f)) + expandHorizontally(expandFrom = Alignment.Start),
                 exit = fadeOut(animationSpec = spring(stiffness = 300f)) + shrinkHorizontally(shrinkTowards = Alignment.Start)
             ) {
-                TextButton(
+                IconButton(
                     onClick = {
-                        onSearchActiveChange(false)
-                        searchQuery = ""
-                        keyboardController?.hide()
+                        if (searchQuery.isNotEmpty()) {
+                            onSearchSubmit(searchQuery)
+                            keyboardController?.hide()
+                        }
                     },
-                    modifier = Modifier.padding(start = 8.dp)
+                    modifier = Modifier.padding(start = 8.dp),
+                    enabled = searchQuery.isNotEmpty()
                 ) {
-                    Text("Cancel")
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Send",
+                        tint = if (searchQuery.isNotEmpty()) 
+                            MaterialTheme.colorScheme.primary 
+                        else 
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                    )
                 }
             }
         }
