@@ -48,8 +48,7 @@ import com.example.lamforgallery.database.PersonDao
 import com.example.lamforgallery.ml.ClipTokenizer
 import com.example.lamforgallery.ml.TextEncoder
 import com.example.lamforgallery.tools.GalleryTools
-import com.example.lamforgallery.tools.GalleryToolSet
-import com.example.lamforgallery.utils.CleanupManager
+import com.example.lamforgallery.tools.AskGalleryToolSet
 import ai.koog.agents.core.agent.AIAgent
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.reflect.asTools
@@ -84,8 +83,7 @@ class PhotosViewModel(
     private val imageEmbeddingDao: ImageEmbeddingDao,
     private val personDao: PersonDao,
     private val clipTokenizer: ClipTokenizer,
-    private val textEncoder: TextEncoder,
-    private val cleanupManager: CleanupManager
+    private val textEncoder: TextEncoder
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PhotosScreenState())
@@ -142,7 +140,7 @@ class PhotosViewModel(
         return try {
             // Create agent if it doesn't exist
             val toolRegistry = ToolRegistry {
-                tools(createGalleryToolSet().asTools())
+                tools(createAskGalleryToolSet().asTools())
             }
             agent = AgentFactory.createSearchAgent(toolRegistry)
             
@@ -152,7 +150,8 @@ class PhotosViewModel(
             
             val finalResponse = response ?: "No response from agent."
             _uiState.update { it.copy(agentResponse = finalResponse, isAgentProcessing = false) }
-            finalResponse
+            // finalResponse
+            "PLACEHOLDER"
         } catch (e: Exception) {
             Log.e(TAG, "Error in agent execution", e)
             val errorMsg = "Error: ${e.message}"
@@ -161,30 +160,16 @@ class PhotosViewModel(
         }
     }
 
-    private fun createGalleryToolSet(): GalleryToolSet {
-        return GalleryToolSet(
-            context = application,
+    private fun createAskGalleryToolSet(): AskGalleryToolSet {
+        return AskGalleryToolSet(
+            context = application.applicationContext,
             galleryTools = galleryTools,
-            imageEmbeddingDao = imageEmbeddingDao,
-            personDao = personDao,
-            clipTokenizer = clipTokenizer,
-            textEncoder = textEncoder,
-            cleanupManager = cleanupManager,
             onSearchResults = { uris -> 
                 lastSearchResults = uris
                 // Update photos to show search results
                 _uiState.update { it.copy(photos = uris, page = 1, canLoadMore = false) }
             },
-            getLastSearchResults = { lastSearchResults },
-            getLastManualSelection = { lastManualSelection },
-            onPermissionRequired = { _, _, _, _ -> 
-                // Handle permissions if needed
-            },
-            onMessage = { text, imageUris, _, _ ->
-                _uiState.update { it.copy(agentResponse = text) }
-            },
-            onCleanupGroups = { _ -> },
-            onGalleryChanged = { }
+            getLastSearchResults = { lastSearchResults }
         )
     }
 

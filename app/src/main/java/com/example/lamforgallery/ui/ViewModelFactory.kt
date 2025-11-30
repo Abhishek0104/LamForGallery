@@ -17,7 +17,6 @@ class ViewModelFactory(
 ) : ViewModelProvider.Factory {
 
     private val gson: Gson by lazy { Gson() }
-    private val galleryTools: GalleryTools by lazy { GalleryTools(application) }
     private val appDatabase: AppDatabase by lazy { AppDatabase.getDatabase(application) }
     private val imageEmbeddingDao: ImageEmbeddingDao by lazy { appDatabase.imageEmbeddingDao() }
     // --- NEW: Person Dao ---
@@ -26,6 +25,15 @@ class ViewModelFactory(
     private val imageEncoder: ImageEncoder by lazy { ImageEncoder(application) }
     private val clipTokenizer: ClipTokenizer by lazy { ClipTokenizer(application) }
     private val textEncoder: TextEncoder by lazy { TextEncoder(application) }
+    private val galleryTools: GalleryTools by lazy { 
+        GalleryTools(
+            application, 
+            imageEmbeddingDao, 
+            personDao, 
+            clipTokenizer, 
+            textEncoder
+        ) 
+    }
     private val cleanupManager: CleanupManager by lazy { CleanupManager(imageEmbeddingDao) }
 
     @Suppress("UNCHECKED_CAST")
@@ -45,8 +53,7 @@ class ViewModelFactory(
                 imageEmbeddingDao,
                 personDao,
                 clipTokenizer,
-                textEncoder,
-                cleanupManager
+                textEncoder
             ) as T
             modelClass.isAssignableFrom(AlbumsViewModel::class.java) -> AlbumsViewModel(galleryTools) as T
             modelClass.isAssignableFrom(AlbumDetailViewModel::class.java) -> AlbumDetailViewModel(galleryTools) as T

@@ -1,5 +1,8 @@
 package com.example.lamforgallery.tools
 
+import ai.koog.prompt.dsl.prompt
+import ai.koog.prompt.message.AttachmentContent
+import ai.koog.prompt.message.ContentPart
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.ContentValues
@@ -17,12 +20,27 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.exifinterface.media.ExifInterface
+import com.example.lamforgallery.agent.AgentFactory
+import com.example.lamforgallery.database.ImageEmbeddingDao
+import com.example.lamforgallery.database.PersonDao
+import com.example.lamforgallery.ml.ClipTokenizer
+import com.example.lamforgallery.ml.TextEncoder
+import com.example.lamforgallery.utils.ImageHelper
+import com.example.lamforgallery.utils.SimilarityUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.Locale
 import kotlin.math.ceil
 
-class GalleryTools(private val context: Context) {
+class GalleryTools(
+    private val context: Context,
+    private val imageEmbeddingDao: ImageEmbeddingDao? = null,
+    private val personDao: PersonDao? = null,
+    private val clipTokenizer: ClipTokenizer? = null,
+    private val textEncoder: TextEncoder? = null
+) {
 
     private val resolver: ContentResolver = context.contentResolver
     private val TAG = "GalleryTools"
@@ -445,5 +463,124 @@ class GalleryTools(private val context: Context) {
         contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
         resolver.update(uri, contentValues, null, null)
         return uri
+    }
+
+    // --- SEARCH PHOTOS ---
+    data class SearchResult(val uri: String, val similarity: Float)
+
+    data class SearchPhotosParams(
+        val query: String = "",
+        val startDate: String? = null,
+        val endDate: String? = null,
+        val location: String? = null,
+        val people: List<String> = emptyList()
+    )
+
+    suspend fun searchPhotos(params: SearchPhotosParams): List<String> {
+        return withContext(Dispatchers.IO) {
+            if (imageEmbeddingDao == null || personDao == null || clipTokenizer == null || textEncoder == null) {
+                throw IllegalStateException("GalleryTools not initialized with required dependencies for search")
+            }
+
+            var candidateUris: Set<String>? = null
+
+            // Filter by people first
+            if (params.people.isNotEmpty()) {
+                val personIds = mutableListOf<String>()
+                for (name in params.people) {
+                    val targetName = if (name.lowercase() in listOf("me", "my", "myself")) "Me" else name
+                    val person = personDao.getPersonByName(targetName)
+                    if (person != null) personIds.add(person.id)
+                }
+                if (personIds.isNotEmpty()) {
+                    candidateUris = personDao.getUrisForPeople(personIds).toSet()
+                } else {
+                    return@withContext emptyList()
+                }
+            }
+
+            // Filter by date range
+            var dateFilterUris: Set<String>? = null
+            if (params.startDate != null && params.endDate != null) {
+                try {
+                    val startMillis = LocalDate.parse(params.startDate).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                    val endMillis = LocalDate.parse(params.endDate).atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                    dateFilterUris = getPhotosInDateRange(startMillis, endMillis).toSet()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse date range", e)
+                }
+            }
+
+            // Perform semantic search with filters
+            var candidates = imageEmbeddingDao.getAllEmbeddings()
+            
+            // Apply filters
+            if (candidateUris != null) {
+                candidates = candidates.filter { candidateUris.contains(it.uri) }
+            }
+            if (dateFilterUris != null) {
+                candidates = candidates.filter { dateFilterUris.contains(it.uri) }
+            }
+            if (!params.location.isNullOrBlank()) {
+                candidates = candidates.filter { 
+                    it.location?.contains(params.location, ignoreCase = true) == true 
+                }
+            }
+
+            // Semantic search with CLIP if query provided
+            if (params.query.isNotBlank()) {
+                val tokens = clipTokenizer.tokenize(params.query)
+                val textEmbedding = textEncoder.encode(tokens)
+                candidates.mapNotNull {
+                    val sim = SimilarityUtil.cosineSimilarity(textEmbedding, it.embedding)
+                    if (sim > 0.2f) SearchResult(it.uri, sim) else null
+                }.sortedByDescending { it.similarity }.map { it.uri }
+            } else {
+                candidates.take(100).map { it.uri }
+            }
+        }
+    }
+
+    // --- ASK GALLERY (Vision Analysis) ---
+    suspend fun analyzeImages(uris: List<String>, query: String): String {
+        return withContext(Dispatchers.IO) {
+            if (uris.isEmpty()) {
+                throw IllegalArgumentException("No images provided for analysis")
+            }
+
+            // Limit to 5 images to avoid large payloads
+            val urisToAnalyze = uris.take(5)
+            
+            // Load images as base64 strings
+            val base64Images = ImageHelper.encodeImages(context, urisToAnalyze)
+            
+            if (base64Images.isEmpty()) {
+                throw IllegalStateException("Failed to load images")
+            }
+
+            // Create vision prompt with images
+            val client = AgentFactory.getLLMClient()
+            val visionPrompt = prompt("vision_analysis") {
+                system("You are a helpful assistant that analyzes images and answers questions about them.")
+                
+                user {
+                    +query
+                    
+                    // Add all base64 encoded images
+                    base64Images.forEach { base64Image ->
+                        image(
+                            ContentPart.Image(
+                                content = AttachmentContent.Binary.Base64(base64Image),
+                                format = "jpeg",
+                            )
+                        )
+                    }
+                }
+            }
+
+            // Execute the prompt and get response
+            val response = client.execute(prompt = visionPrompt, model = AgentFactory.getLLMModel())
+            response[0].content ?: "No response from vision model"
+        }
     }
 }
