@@ -18,17 +18,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 
 /**
- * Enum to specify the source of image URIs for tool operations
- */
-@Serializable
-enum class ImageUrisSource {
-    @LLMDescription("Use images from the last search results")
-    SEARCH,
-    @LLMDescription("Use images from the user's current manual selection")
-    SELECTION
-}
-
-/**
  * Koog-compatible ToolSet for gallery operations.
  * Wraps GalleryTools functionality with Koog's annotation-based tool system.
  */
@@ -54,14 +43,6 @@ class GalleryToolSet(
 
     private data class SearchResult(val uri: String, val similarity: Float)
 
-    // --- HELPER: Resolve URIs based on source ---
-    private fun getUrisFromSource(source: ImageUrisSource): List<String> {
-        return when (source) {
-            ImageUrisSource.SEARCH -> getLastSearchResults()
-            ImageUrisSource.SELECTION -> getLastManualSelection()
-        }
-    }
-
     // --- TOOL 1: SEARCH PHOTOS ---
     @Serializable
     data class SearchPhotosArgs(
@@ -78,7 +59,7 @@ class GalleryToolSet(
     )
 
     @Tool
-    @LLMDescription("Searches for photos using AI-powered semantic search with optional filters for date, location, and people. It  will internally record/update Uris of found images so that it can be used by other tools just return number of images found.")
+    @LLMDescription("Searches for photos using AI-powered semantic search with optional filters for date, location, and people. Returns a list of image URIs that match the search criteria.")
     suspend fun searchPhotos(args: SearchPhotosArgs): String {
         return try {
             val argsJson = Json.encodeToString(args)
@@ -99,11 +80,11 @@ class GalleryToolSet(
 
             if (foundUris.isEmpty()) {
                 // onMessage("I couldn't find any matching photos.", null, false, false)
-                """{"count": 0, "message": "No matching photos found"}"""
+                """{"count": 0, "imageUris": [], "message": "No matching photos found"}"""
             } else {
                 onMessage("", foundUris, true, false)
                 val urisJson = foundUris.joinToString(",") { "\"$it\"" }
-                """{"count": ${foundUris.size}, "message": "Found ${foundUris.size} photos"}"""
+                """{"count": ${foundUris.size}, "imageUris": [$urisJson], "message": "Found ${foundUris.size} photos"}"""
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error in searchPhotos", e)
@@ -114,12 +95,12 @@ class GalleryToolSet(
     // --- TOOL 2: DELETE PHOTOS ---
     @Serializable
     data class DeletePhotosArgs(
-        @property:LLMDescription("Source of images: SEARCH (from last search) or SELECTION (from user's manual selection)")
-        val imageUrisSource: ImageUrisSource
+        @property:LLMDescription("List of image URIs to delete")
+        val imageUris: List<String>
     )
 
     @Tool
-    @LLMDescription("Deletes photos (moves to trash). Requires Android 11+ and user permission. Use imageUrisSource=SEARCH after searchPhotos, or imageUrisSource=SELECTION for manually selected photos.")
+    @LLMDescription("Deletes photos (moves to trash). Requires Android 11+ and user permission. Returns the URIs of images that were deleted.")
     suspend fun deletePhotos(args: DeletePhotosArgs): String {
         return try {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
@@ -129,10 +110,10 @@ class GalleryToolSet(
             val argsJson = Json.encodeToString(args)
             Log.d(TAG, "🗑️ deletePhotos called with args: $argsJson")
 
-            val uris = getUrisFromSource(args.imageUrisSource)
+            val uris = args.imageUris
 
             if (uris.isEmpty()) {
-                return """{"error": "No photos available from ${args.imageUrisSource} source"}"""
+                return """{"error": "No photos provided for deletion"}"""
             }
 
             val intentSender = galleryTools.createDeleteIntentSender(uris)
@@ -144,7 +125,8 @@ class GalleryToolSet(
                     "Waiting for permission to delete ${uris.size} photos...",
                     mapOf("photo_uris" to uris)
                 )
-                """{"requiresPermission": true, "count": ${uris.size}, "message": "Permission required to delete ${uris.size} photos"}"""
+                val urisJson = uris.joinToString(",") { "\"$it\"" }
+                """{"requiresPermission": true, "count": ${uris.size}, "imageUris": [$urisJson], "message": "Permission required to delete ${uris.size} photos"}"""
             } else {
                 """{"error": "Failed to create delete request"}"""
             }
@@ -157,14 +139,14 @@ class GalleryToolSet(
     // --- TOOL 3: MOVE PHOTOS TO ALBUM ---
     @Serializable
     data class MovePhotosToAlbumArgs(
+        @property:LLMDescription("List of image URIs to move")
+        val imageUris: List<String>,
         @property:LLMDescription("Name of the album/folder to move photos to")
-        val albumName: String,
-        @property:LLMDescription("Source of images: SEARCH (from last search) or SELECTION (from user's manual selection)")
-        val imageUrisSource: ImageUrisSource
+        val albumName: String
     )
 
     @Tool
-    @LLMDescription("Moves photos to a specified album/folder. Creates the album if it doesn't exist. Requires Android 11+ and user permission. Use imageUrisSource=SEARCH after searchPhotos, or imageUrisSource=SELECTION for manually selected photos.")
+    @LLMDescription("Moves photos to a specified album/folder. Creates the album if it doesn't exist. Requires Android 11+ and user permission. Returns the URIs of images that were moved.")
     suspend fun movePhotosToAlbum(args: MovePhotosToAlbumArgs): String {
         return try {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
@@ -174,10 +156,10 @@ class GalleryToolSet(
             val argsJson = Json.encodeToString(args)
             Log.d(TAG, "📁 movePhotosToAlbum called with args: $argsJson")
 
-            val uris = getUrisFromSource(args.imageUrisSource)
+            val uris = args.imageUris
 
             if (uris.isEmpty()) {
-                return """{"error": "No photos available from ${args.imageUrisSource} source"}"""
+                return """{"error": "No photos provided for moving"}"""
             }
 
             val intentSender = galleryTools.createWriteIntentSender(uris)
@@ -189,7 +171,8 @@ class GalleryToolSet(
                     "Waiting for permission to move ${uris.size} photos...",
                     mapOf("photo_uris" to uris, "album_name" to args.albumName)
                 )
-                """{"Permission required to move ${uris.size} photos to album ${args.albumName}}"""
+                val urisJson = uris.joinToString(",") { "\"$it\"" }
+                """{"requiresPermission": true, "count": ${uris.size}, "imageUris": [$urisJson], "message": "Permission required to move ${uris.size} photos to album ${args.albumName}"}"""
             } else {
                 """{"error": "Failed to create write request"}"""
             }
@@ -202,23 +185,23 @@ class GalleryToolSet(
     // --- TOOL 4: CREATE COLLAGE ---
     @Serializable
     data class CreateCollageArgs(
+        @property:LLMDescription("List of image URIs to include in the collage (up to 4 images)")
+        val imageUris: List<String>,
         @property:LLMDescription("Title/name for the collage image")
-        val title: String = "My Collage",
-        @property:LLMDescription("Source of images: SEARCH (from last search) or SELECTION (from user's manual selection)")
-        val imageUrisSource: ImageUrisSource
+        val title: String = "My Collage"
     )
 
     @Tool
-    @LLMDescription("Creates a collage from multiple photos by stitching them together. Takes up to 4 photos and saves the result as a new image. Use imageUrisSource=SEARCH after searchPhotos, or imageUrisSource=SELECTION for manually selected photos.")
+    @LLMDescription("Creates a collage from multiple photos by stitching them together. Takes up to 4 photos and saves the result as a new image. Returns the URI of the created collage.")
     suspend fun createCollage(args: CreateCollageArgs): String {
         return try {
             val argsJson = Json.encodeToString(args)
             Log.d(TAG, "🖼️ createCollage called with args: $argsJson")
 
-            val uris = getUrisFromSource(args.imageUrisSource)
+            val uris = args.imageUris
 
             if (uris.isEmpty()) {
-                return """{"error": "No photos available from ${args.imageUrisSource} source"}"""
+                return """{"error": "No photos provided for collage creation"}"""
             }
 
             val collageUris = uris.take(4)
@@ -228,7 +211,7 @@ class GalleryToolSet(
                 val message = "I've created the collage '${args.title}'."
                 onMessage(message, listOf(newCollageUri), true, false)
                 onGalleryChanged()
-                """{"success": true, "title": "${args.title}", "message": "Collage created successfully"}"""
+                """{"success": true, "title": "${args.title}", "imageUris": ["$newCollageUri"], "message": "Collage created successfully"}"""
             } else {
                 """{"error": "Failed to create collage"}"""
             }
@@ -241,23 +224,23 @@ class GalleryToolSet(
     // --- TOOL 5: APPLY FILTER ---
     @Serializable
     data class ApplyFilterArgs(
+        @property:LLMDescription("List of image URIs to apply filter to")
+        val imageUris: List<String>,
         @property:LLMDescription("Name of the filter to apply. Supported: 'grayscale', 'black and white', 'b&w', 'sepia'")
-        val filterName: String,
-        @property:LLMDescription("Source of images: SEARCH (from last search) or SELECTION (from user's manual selection)")
-        val imageUrisSource: ImageUrisSource
+        val filterName: String
     )
 
     @Tool
-    @LLMDescription("Applies a visual filter to photos and saves them as new images. Supported filters: grayscale (black and white, b&w) and sepia. Use imageUrisSource=SEARCH after searchPhotos, or imageUrisSource=SELECTION for manually selected photos.")
+    @LLMDescription("Applies a visual filter to photos and saves them as new images. Supported filters: grayscale (black and white, b&w) and sepia. Returns the URIs of the newly created filtered images.")
     suspend fun applyFilter(args: ApplyFilterArgs): String {
         return try {
             val argsJson = Json.encodeToString(args)
             Log.d(TAG, "🎨 applyFilter called with args: $argsJson")
 
-            val uris = getUrisFromSource(args.imageUrisSource)
+            val uris = args.imageUris
 
             if (uris.isEmpty()) {
-                return """{"error": "No photos available from ${args.imageUrisSource} source"}"""
+                return """{"error": "No photos provided for filter application"}"""
             }
 
             val newImageUris = galleryTools.applyFilter(uris, args.filterName)
@@ -266,7 +249,8 @@ class GalleryToolSet(
                 val message = "I've applied the '${args.filterName}' filter."
                 onMessage(message, newImageUris, true, false)
                 onGalleryChanged()
-                """{"success": true, "count": ${newImageUris.size}, "message": "Applied ${args.filterName} filter to ${newImageUris.size} photos"}"""
+                val urisJson = newImageUris.joinToString(",") { "\"$it\"" }
+                """{"success": true, "count": ${newImageUris.size}, "imageUris": [$urisJson], "message": "Applied ${args.filterName} filter to ${newImageUris.size} photos"}"""
             } else {
                 """{"error": "Failed to apply filter"}"""
             }
@@ -279,25 +263,26 @@ class GalleryToolSet(
     // --- TOOL 6: GET PHOTO METADATA ---
     @Serializable
     data class GetPhotoMetadataArgs(
-        @property:LLMDescription("Source of images: SEARCH (from last search) or SELECTION (from user's manual selection)")
-        val imageUrisSource: ImageUrisSource
+        @property:LLMDescription("List of image URIs to get metadata from")
+        val imageUris: List<String>
     )
 
     @Tool
-    @LLMDescription("Reads and returns EXIF metadata from photos including date taken, camera model, and location information. Use imageUrisSource=SEARCH after searchPhotos, or imageUrisSource=SELECTION for manually selected photos.")
+    @LLMDescription("Reads and returns EXIF metadata from photos including date taken, camera model, and location information. Returns metadata along with the image URIs.")
     suspend fun getPhotoMetadata(args: GetPhotoMetadataArgs): String {
         return try {
             val argsJson = Json.encodeToString(args)
             Log.d(TAG, "ℹ️ getPhotoMetadata called with args: $argsJson")
 
-            val uris = getUrisFromSource(args.imageUrisSource)
+            val uris = args.imageUris
 
             if (uris.isEmpty()) {
-                return """{"error": "No photos available from ${args.imageUrisSource} source"}"""
+                return """{"error": "No photos provided for metadata extraction"}"""
             }
 
             val metadataSummary = galleryTools.getPhotoMetadata(uris)
-            """{"success": true, "metadata": "$metadataSummary"}"""
+            val urisJson = uris.joinToString(",") { "\"$it\"" }
+            """{"success": true, "imageUris": [$urisJson], "metadata": "$metadataSummary"}"""
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error in getPhotoMetadata", e)
             """{"error": "Failed to get metadata: ${e.message}"}"""
@@ -339,30 +324,32 @@ class GalleryToolSet(
     // --- TOOL 8: ASK GALLERY (Vision) ---
     @Serializable
     data class AskGalleryArgs(
+        @property:LLMDescription("List of image URIs to analyze")
+        val imageUris: List<String>,
         @property:LLMDescription("The question or query about the images (e.g., 'What food is this?', 'Describe these images', 'What's in this photo?')")
-        val query: String,
-        @property:LLMDescription("Source of images: SEARCH (from last search) or SELECTION (from user's manual selection)")
-        val imageUrisSource: ImageUrisSource
+        val query: String
     )
 
     @Tool
-    @LLMDescription("Analyzes and answers questions about images using AI vision capabilities. Use imageUrisSource=SEARCH after searchPhotos, or imageUrisSource=SELECTION for manually selected photos. Use this for 'What is this?', 'Describe', or any visual questions about photo content.")
+    @LLMDescription("Analyzes and answers questions about images using AI vision capabilities. Returns the analysis answer along with the image URIs that were analyzed. Use this for 'What is this?', 'Describe', or any visual questions about photo content.")
     suspend fun askGallery(args: AskGalleryArgs): String {
         return try {
             val argsJson = Json.encodeToString(args)
             Log.d(TAG, "👁️ askGallery called with args: $argsJson")
 
-            val uris = getUrisFromSource(args.imageUrisSource)
+            val uris = args.imageUris
 
             if (uris.isEmpty()) {
-                return """{"error": "No images available from ${args.imageUrisSource} source"}"""
+                return """{"error": "No images provided for analysis"}"""
             }
 
             val answer = galleryTools.analyzeImages(uris, args.query)
             Log.d(TAG, "✅ Vision analysis complete: $answer")
             
+            val analyzedUris = uris.take(5)
+            val urisJson = analyzedUris.joinToString(",") { "\"$it\"" }
             // Return the analysis result
-            """{"success": true, "answer": "${answer.replace("\"", "\\\"")}", "imageCount": ${uris.take(5).size}}"""
+            """{"success": true, "answer": "${answer.replace("\"", "\\\"")}", "imageUris": [$urisJson], "imageCount": ${analyzedUris.size}}"""
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error in askGallery", e)
             """{"error": "Failed to analyze images: ${e.message}"}"""

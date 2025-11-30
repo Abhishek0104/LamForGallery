@@ -170,7 +170,7 @@ class AgentViewModel(
             _waitingForUserInput.value = false
             _uiState.update { it.copy(isWaitingForUserInput = false) }
             setStatus(AgentStatus.Loading("Thinking..."))
-            userInputContinuation?.invoke("{\"num_selected_photos\": ${selectedUris.size}, \"user_input\": \"$input\"}")
+            userInputContinuation?.invoke("{\"selected_photos_uris\": ${selectedUris}, \"user_input\": \"$input\"}")
             userInputContinuation = null
         } else {
             // Start a new agent conversation
@@ -190,7 +190,7 @@ class AgentViewModel(
                     }
                     
                     Log.d(TAG, "🚀 AGENT EXECUTION START with user query: $input")
-                    val response = agent!!.run("{\"num_selected_photos\": ${selectedUris.size}, \"user_input\": \"$input\"}")
+                    val response = agent!!.run("{\"selected_photos_uris\": ${selectedUris}, \"user_input\": \"$input\"}")
                     Log.d(TAG, "✅ AGENT EXECUTION COMPLETE: $response")
                     
                     addMessage(ChatMessage(
