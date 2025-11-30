@@ -4,9 +4,8 @@ import android.app.Application
 import android.content.ContentUris
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.ImageDecoder
+import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -30,8 +29,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
 import java.nio.ByteBuffer
+import kotlin.coroutines.resume
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 data class EmbeddingUiState(
     val statusMessage: String = "Ready to index. Press 'Start' to begin.",
@@ -52,7 +53,6 @@ class EmbeddingViewModel(
     val uiState: StateFlow<EmbeddingUiState> = _uiState.asStateFlow()
     private val contentResolver = application.contentResolver
 
-    // New Components for Face Logic
     private val db = AppDatabase.getDatabase(application)
     private val personDao = db.personDao()
     private val faceEncoder = FaceEncoder(application)
@@ -61,12 +61,16 @@ class EmbeddingViewModel(
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
             .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
             .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
-            // --- CHANGE: Allow smaller faces (0.1 is default, maybe explicit 0.15 helps filter noise?) ---
             .setMinFaceSize(0.1f)
             .build()
     )
 
-    companion object { private const val TAG = "EmbeddingViewModel" }
+    companion object {
+        private const val TAG = "EmbeddingViewModel"
+        private const val MIN_FACE_SIZE_PIXELS = 64 // Minimum width/height for a face
+        private const val BLUR_THRESHOLD = 35.0 // Lower is more blurry. Adjusted for manual implementation.
+        private const val SIMILARITY_THRESHOLD = 0.65f // Stricter matching
+    }
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -87,13 +91,11 @@ class EmbeddingViewModel(
             try {
                 val allImageUris = getAllImageUris()
                 val indexedUris = dao.getAllEmbeddings().map { it.uri }.toSet()
-                // --- CHANGE: Re-index everything to test face logic if needed, or stick to new ---
-                // For debugging, you might want to temporarily comment out this filter:
                 val newImages = allImageUris.filter { !indexedUris.contains(it.toString()) }
                 val totalNewImages = newImages.size
 
                 if (totalNewImages == 0) {
-                    _uiState.update { it.copy(isIndexing = false, statusMessage = "All caught up! (Clear app data to re-index)", totalImages = allImageUris.size, indexedImages = allImageUris.size) }
+                    _uiState.update { it.copy(isIndexing = false, statusMessage = "All caught up!", totalImages = allImageUris.size, indexedImages = allImageUris.size) }
                     return@launch
                 }
 
@@ -106,7 +108,6 @@ class EmbeddingViewModel(
                         bitmap = loadBitmap(uri)
                         if (bitmap == null) return@forEachIndexed
 
-                        // 1. Scene Embedding (CLIP)
                         val embedding = imageEncoder.encode(bitmap)
                         val info = galleryTools.extractImageInfo(uri.toString())
 
@@ -120,7 +121,6 @@ class EmbeddingViewModel(
                             cameraModel = info.cameraModel
                         ))
 
-                        // 2. Face Recognition (New)
                         processFaces(bitmap, uri.toString())
 
                     } catch (e: Exception) {
@@ -157,7 +157,6 @@ class EmbeddingViewModel(
         }
     }
 
-    // Helper function to convert FloatArray -> ByteArray
     private fun floatArrayToByteArray(floats: FloatArray): ByteArray {
         val buffer = ByteBuffer.allocate(floats.size * 4)
         buffer.asFloatBuffer().put(floats)
@@ -183,16 +182,12 @@ class EmbeddingViewModel(
             }
         }
 
-        val threshold = 0.5f // 0.5 is generous, 0.6 is strict
         val personId: String
-
-        if (bestMatch != null && bestSim > threshold) {
+        if (bestMatch != null && bestSim > SIMILARITY_THRESHOLD) {
             personId = bestMatch.id
             val embeddingBytes = floatArrayToByteArray(bestMatch.embedding)
             personDao.updateEmbedding(bestMatch.id, embeddingBytes, bestMatch.faceCount + 1)
         } else {
-            // --- NEW: Calculate Normalized Bounds ---
-            // Ensure we don't divide by zero
             val w = if (imageWidth > 0) imageWidth.toFloat() else 1f
             val h = if (imageHeight > 0) imageHeight.toFloat() else 1f
 
@@ -200,7 +195,6 @@ class EmbeddingViewModel(
                 name = "Unknown ${allPeople.size + 1}",
                 embedding = newVector,
                 coverUri = uri,
-                // Save normalized coordinates (0.0 to 1.0)
                 faceLeft = bounds.left / w,
                 faceTop = bounds.top / h,
                 faceRight = bounds.right / w,
@@ -213,7 +207,68 @@ class EmbeddingViewModel(
         personDao.insertImagePersonLink(ImagePersonCrossRef(uri, personId))
     }
 
-    // --- Update processFaces to pass these bounds ---
+    private fun isFaceQualityGood(faceBitmap: Bitmap): Boolean {
+        if (faceBitmap.width < MIN_FACE_SIZE_PIXELS || faceBitmap.height < MIN_FACE_SIZE_PIXELS) {
+            Log.d(TAG, "Face rejected: Too small (${faceBitmap.width}x${faceBitmap.height})")
+            return false
+        }
+
+        val variance = calculateBlurriness(faceBitmap)
+        if (variance < BLUR_THRESHOLD) {
+            Log.d(TAG, "Face rejected: Too blurry (Variance: $variance)")
+            return false
+        }
+
+        return true
+    }
+
+    private fun calculateBlurriness(bitmap: Bitmap): Double {
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width < 3 || height < 3) return 0.0 // Not enough data to calculate
+
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        var sumOfVariances = 0.0
+        var mean = 0.0
+        val laplacian = IntArray(width * height)
+
+        // Simplified grayscale and Laplacian operator in one pass
+        for (y in 1 until height - 1) {
+            for (x in 1 until width - 1) {
+                val p = y * width + x
+
+                // Get grayscale values of 3x3 neighborhood
+                val p1 = Color.red(pixels[p - width - 1])
+                val p2 = Color.red(pixels[p - width])
+                val p3 = Color.red(pixels[p - width + 1])
+                val p4 = Color.red(pixels[p - 1])
+                val p5 = Color.red(pixels[p])
+                val p6 = Color.red(pixels[p + 1])
+                val p7 = Color.red(pixels[p + width - 1])
+                val p8 = Color.red(pixels[p + width])
+                val p9 = Color.red(pixels[p + width + 1])
+
+                // Apply Laplacian kernel: [[0, 1, 0], [1, -4, 1], [0, 1, 0]]
+                val edge = (p2 + p4 + p6 + p8) - 4 * p5
+                laplacian[p] = edge
+                mean += edge
+            }
+        }
+
+        mean /= (width * height)
+
+        for (y in 1 until height - 1) {
+            for (x in 1 until width - 1) {
+                sumOfVariances += (laplacian[y * width + x] - mean).pow(2.0)
+            }
+        }
+
+        return sumOfVariances / (width * height)
+    }
+
+
     private suspend fun processFaces(bitmap: Bitmap, uri: String) {
         try {
             val inputImage = InputImage.fromBitmap(bitmap, 0)
@@ -221,16 +276,16 @@ class EmbeddingViewModel(
 
             for (face in faces) {
                 val bounds = face.boundingBox
-                // Safety check
                 if (bounds.left < 0 || bounds.top < 0 || bounds.right > bitmap.width || bounds.bottom > bitmap.height) {
                     continue
                 }
 
                 val faceCrop = Bitmap.createBitmap(bitmap, bounds.left, bounds.top, bounds.width(), bounds.height())
-                val faceVector = faceEncoder.getFaceEmbedding(faceCrop)
 
-                // Pass bounds and dimensions
-                identifyAndLinkPerson(faceVector, uri, bounds, bitmap.width, bitmap.height)
+                if (isFaceQualityGood(faceCrop)) {
+                    val faceVector = faceEncoder.getFaceEmbedding(faceCrop)
+                    identifyAndLinkPerson(faceVector, uri, bounds, bitmap.width, bitmap.height)
+                }
 
                 faceCrop.recycle()
             }
@@ -244,7 +299,7 @@ class EmbeddingViewModel(
             faceDetector.process(image)
                 .addOnSuccessListener { cont.resume(it) }
                 .addOnFailureListener {
-                    Log.e(TAG, "Face detection failed", it) // --- LOGGING ---
+                    Log.e(TAG, "Face detection failed", it)
                     cont.resume(emptyList())
                 }
         }

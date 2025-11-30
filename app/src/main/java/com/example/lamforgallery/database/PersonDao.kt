@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 
 @Dao
 interface PersonDao {
@@ -16,7 +17,6 @@ interface PersonDao {
     @Query("SELECT * FROM people")
     suspend fun getAllPeople(): List<Person>
 
-    // --- UPDATED: Fetch relation as well ---
     @Query("""
         SELECT p.id, p.name, p.coverUri, p.faceLeft, p.faceTop, p.faceRight, p.faceBottom, p.relation,
         COUNT(DISTINCT ip.uri) as imageCount
@@ -32,11 +32,9 @@ interface PersonDao {
     @Query("SELECT * FROM people WHERE name LIKE '%' || :name || '%' LIMIT 1")
     suspend fun getPersonByName(name: String): Person?
 
-    // --- NEW: Get Person by Relation ---
     @Query("SELECT * FROM people WHERE relation LIKE '%' || :relation || '%' LIMIT 1")
     suspend fun getPersonByRelation(relation: String): Person?
 
-    // --- NEW: Update both Name and Relation ---
     @Query("UPDATE people SET name = :newName, relation = :newRelation WHERE id = :personId")
     suspend fun updatePersonDetails(personId: String, newName: String, newRelation: String?)
 
@@ -45,4 +43,15 @@ interface PersonDao {
 
     @Query("SELECT uri FROM image_people WHERE personId IN (:personIds)")
     suspend fun getUrisForPeople(personIds: List<String>): List<String>
+
+    // --- NEW: Remove a specific photo-person link ---
+    @Query("DELETE FROM image_people WHERE uri = :uri AND personId = :personId")
+    suspend fun removePhotoFromPerson(uri: String, personId: String)
+
+    // --- NEW: Transaction to move a photo from one person to another ---
+    @Transaction
+    suspend fun movePhotoToPerson(uri: String, oldPersonId: String, newPersonId: String) {
+        removePhotoFromPerson(uri, oldPersonId)
+        insertImagePersonLink(ImagePersonCrossRef(uri, newPersonId))
+    }
 }

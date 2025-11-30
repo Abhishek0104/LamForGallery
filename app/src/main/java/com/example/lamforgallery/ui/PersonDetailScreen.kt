@@ -1,10 +1,15 @@
 package com.example.lamforgallery.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
@@ -12,12 +17,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import com.example.lamforgallery.database.Person
+import com.example.lamforgallery.database.PersonUiModel
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PersonDetailScreen(
     personId: String,
@@ -27,6 +35,9 @@ fun PersonDetailScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showEditDialog by remember { mutableStateOf(false) }
+    var showMoveDialog by remember { mutableStateOf(false) }
+    var selectedPhotoUri by remember { mutableStateOf<String?>(null) }
+    var showPhotoMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(personId) {
         viewModel.loadPerson(personId)
@@ -79,7 +90,16 @@ fun PersonDetailScreen(
                         Box(
                             modifier = Modifier
                                 .aspectRatio(1f)
-                                .clickable { onPhotoClick(uri) }
+                                .combinedClickable(
+                                    onClick = {
+                                        val encodedUri = URLEncoder.encode(uri, StandardCharsets.UTF_8.name())
+                                        onPhotoClick(encodedUri)
+                                    },
+                                    onLongClick = {
+                                        selectedPhotoUri = uri
+                                        showPhotoMenu = true
+                                    }
+                                )
                         ) {
                             AsyncImage(
                                 model = uri,
@@ -104,7 +124,89 @@ fun PersonDetailScreen(
                 }
             )
         }
+
+        if (showPhotoMenu && selectedPhotoUri != null) {
+            PhotoActionMenu(
+                onDismiss = { showPhotoMenu = false },
+                onRemove = {
+                    viewModel.removePhotoFromPerson(selectedPhotoUri!!)
+                    showPhotoMenu = false
+                },
+                onMove = {
+                    showMoveDialog = true
+                    showPhotoMenu = false
+                }
+            )
+        }
+
+        if (showMoveDialog && selectedPhotoUri != null) {
+            MovePersonDialog(
+                allPeople = uiState.allPeople.filter { it.id != uiState.person?.id },
+                onDismiss = { showMoveDialog = false },
+                onConfirm = { newPersonId ->
+                    viewModel.movePhotoToPerson(selectedPhotoUri!!, newPersonId)
+                    showMoveDialog = false
+                }
+            )
+        }
     }
+}
+
+@Composable
+fun PhotoActionMenu(
+    onDismiss: () -> Unit,
+    onRemove: () -> Unit,
+    onMove: () -> Unit
+) {
+    DropdownMenu(
+        expanded = true,
+        onDismissRequest = onDismiss
+    ) {
+        DropdownMenuItem(
+            text = { Text("Remove from this person") },
+            onClick = onRemove
+        )
+        DropdownMenuItem(
+            text = { Text("Move to another person") },
+            onClick = onMove
+        )
+    }
+}
+
+@Composable
+fun MovePersonDialog(
+    allPeople: List<PersonUiModel>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Move Photo To...") },
+        text = {
+            LazyColumn {
+                items(allPeople) { person ->
+                    ListItem(
+                        headlineContent = { Text(person.name) },
+                        modifier = Modifier.clickable { onConfirm(person.id) },
+                        leadingContent = {
+                            AsyncImage(
+                                model = person.coverUri,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(40.dp).clip(CircleShape)
+                            )
+                        }
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable
