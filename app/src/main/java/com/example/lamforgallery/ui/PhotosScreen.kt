@@ -333,7 +333,7 @@ fun PhotosScreen(
                 }
             }
             AnimatedVisibility(
-                visible = photosUiState.agentResponse.isNotEmpty(),
+                visible = photosUiState.agentResponse.isNotEmpty() || photosUiState.isAgentProcessing,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -351,13 +351,32 @@ fun PhotosScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = photosUiState.agentResponse,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { photosViewModel.clearAgentResponse() }) {
-                            Icon(Icons.Default.Close, contentDescription = "Dismiss")
+                        if (photosUiState.isAgentProcessing) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    text = "Processing...",
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = photosUiState.agentResponse,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(onClick = { photosViewModel.clearAgentResponse() }) {
+                                Icon(Icons.Default.Close, contentDescription = "Dismiss")
+                            }
                         }
                     }
                 }
