@@ -23,13 +23,11 @@ class AskGalleryToolSet(
 
     private val TAG = "AskGalleryToolSet"
 
-    // --- TOOL: ASK GALLERY (Search + Vision) ---
+    // --- TOOL 1: SEARCH PHOTOS ---
     @Serializable
-    data class AskGalleryArgs(
+    data class SearchPhotosArgs(
         @property:LLMDescription("The search query for semantic/AI-powered search (e.g., 'sunset', 'cat', 'receipts') using image and text embeddings. Don't include information which were used in other arguments like date/location/people.")
         val search_query: String = "",
-        @property:LLMDescription("Optional question about the visual content of the images (e.g., 'What food is this?', 'Describe these images', 'What's in this photo?'). Leave empty if only searching for photos.")
-        val vision_query: String? = null,
         @property:LLMDescription("Start date in YYYY-MM-DD format for date range filtering")
         val start_date: String? = null,
         @property:LLMDescription("End date in YYYY-MM-DD format for date range filtering")
@@ -41,13 +39,13 @@ class AskGalleryToolSet(
     )
 
     @Tool
-    @LLMDescription("Searches for photos using AI-powered semantic search with optional filters (date, location, people), and optionally analyzes the found images using AI vision. First performs the search, then if vision_query is provided and images are found, analyzes them to answer questions about their visual content.")
-    suspend fun askGallery(args: AskGalleryArgs): String {
+    @LLMDescription("Searches for photos using AI-powered semantic search with optional filters for date, location, and people. Returns a list of image URIs that match the search criteria.")
+    suspend fun searchPhotos(args: SearchPhotosArgs): String {
         return try {
             val argsJson = Json.encodeToString(args)
-            Log.d(TAG, "🔍 askGallery called with args: $argsJson")
+            Log.d(TAG, "🔍 searchPhotos called with args: $argsJson")
 
-            // Step 1: Search for photos
+            // Search for photos
             val params = GalleryTools.SearchPhotosParams(
                 query = args.search_query,
                 startDate = args.start_date,
@@ -62,24 +60,52 @@ class AskGalleryToolSet(
             onSearchResults(foundUris)
 
             if (foundUris.isEmpty()) {
-                return """{"count": 0, "message": "No matching photos found"}"""
-            }
-
-            // Step 2: If vision_query is provided, analyze the images
-            if (!args.vision_query.isNullOrBlank()) {
-                Log.d(TAG, "👁️ Performing vision analysis on ${foundUris.size} images")
-                
-                val answer = galleryTools.analyzeImages(foundUris, args.vision_query)
-                Log.d(TAG, "✅ Vision analysis complete: $answer")
-                
-                return """{"count": ${foundUris.size}, "answer": "${answer.replace("\"", "\\\"")}", "imageCount": ${foundUris.take(5).size}}"""
+                """{"count": 0, "imageUris": [], "message": "No matching photos found"}"""
             } else {
-                // Just return search results
-                return """{"count": ${foundUris.size}, "message": "Found ${foundUris.size} photos"}"""
+                val urisJson = foundUris.joinToString(",") { "\"$it\"" }
+                """{"count": ${foundUris.size}, "imageUris": [$urisJson], "message": "Found ${foundUris.size} photos"}"""
             }
         } catch (e: Exception) {
+            Log.e(TAG, "❌ Error in searchPhotos", e)
+            """{"error": "Failed to search photos: ${e.message}"}"""
+        }
+    }
+
+    // --- TOOL 2: ASK GALLERY (Vision Analysis) ---
+    @Serializable
+    data class AskGalleryArgs(
+        @property:LLMDescription("List of image URIs to analyze")
+        val imageUris: List<String>,
+        @property:LLMDescription("Question about the visual content of the images (e.g., 'What food is this?', 'Describe these images', 'What's in this photo?')")
+        val vision_query: String
+    )
+
+    @Tool
+    @LLMDescription("Analyzes images using AI vision to answer questions about their visual content. Takes a list of image URIs and a question, returns an answer based on the visual analysis.")
+    suspend fun askGallery(args: AskGalleryArgs): String {
+        return try {
+            val argsJson = Json.encodeToString(args)
+            Log.d(TAG, "👁️ askGallery called with args: $argsJson")
+
+            if (args.imageUris.isEmpty()) {
+                return """{"error": "No images provided for analysis"}"""
+            }
+
+            if (args.vision_query.isBlank()) {
+                return """{"error": "No question provided for vision analysis"}"""
+            }
+
+            Log.d(TAG, "👁️ Performing vision analysis on ${args.imageUris.size} images")
+            
+            val answer = galleryTools.analyzeImages(args.imageUris, args.vision_query)
+            Log.d(TAG, "✅ Vision analysis complete: $answer")
+            
+            val analyzedUris = args.imageUris.take(5)
+            val urisJson = analyzedUris.joinToString(",") { "\"$it\"" }
+            """{"success": true, "answer": "${answer.replace("\"", "\\\"")}", "imageUris": [$urisJson], "imageCount": ${analyzedUris.size}}"""
+        } catch (e: Exception) {
             Log.e(TAG, "❌ Error in askGallery", e)
-            """{"error": "Failed to process request: ${e.message}"}"""
+            """{"error": "Failed to analyze images: ${e.message}"}"""
         }
     }
 }

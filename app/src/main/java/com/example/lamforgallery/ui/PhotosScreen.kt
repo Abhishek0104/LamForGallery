@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -332,7 +333,7 @@ fun PhotosScreen(
                 }
             }
             AnimatedVisibility(
-                visible = photosUiState.agentResponse.isNotEmpty(),
+                visible = photosUiState.agentResponse.isNotEmpty() || photosUiState.isAgentProcessing,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.BottomCenter)
@@ -350,13 +351,32 @@ fun PhotosScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = photosUiState.agentResponse,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { photosViewModel.clearAgentResponse() }) {
-                            Icon(Icons.Default.Close, contentDescription = "Dismiss")
+                        if (photosUiState.isAgentProcessing) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    text = "Processing...",
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = photosUiState.agentResponse,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(onClick = { photosViewModel.clearAgentResponse() }) {
+                                Icon(Icons.Default.Close, contentDescription = "Dismiss")
+                            }
                         }
                     }
                 }
@@ -421,8 +441,10 @@ private fun PhotosSearchBar(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = {
-                    onSearchSubmit(searchQuery)
-                    keyboardController?.hide()
+                    if (searchQuery.isNotEmpty()) {
+                        onSearchSubmit(searchQuery)
+                        keyboardController?.hide()
+                    }
                 }),
                 shape = CircleShape,
                 colors = TextFieldDefaults.colors(
@@ -430,7 +452,15 @@ private fun PhotosSearchBar(
                     unfocusedIndicatorColor = Color.Transparent,
                     disabledIndicatorColor = Color.Transparent
                 ),
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                leadingIcon = {
+                    IconButton(onClick = {
+                        onSearchActiveChange(false)
+                        searchQuery = ""
+                        keyboardController?.hide()
+                    }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
                         IconButton(onClick = { searchQuery = "" }) {
@@ -444,15 +474,24 @@ private fun PhotosSearchBar(
                 enter = fadeIn(animationSpec = spring(stiffness = 300f)) + expandHorizontally(expandFrom = Alignment.Start),
                 exit = fadeOut(animationSpec = spring(stiffness = 300f)) + shrinkHorizontally(shrinkTowards = Alignment.Start)
             ) {
-                TextButton(
+                IconButton(
                     onClick = {
-                        onSearchActiveChange(false)
-                        searchQuery = ""
-                        keyboardController?.hide()
+                        if (searchQuery.isNotEmpty()) {
+                            onSearchSubmit(searchQuery)
+                            keyboardController?.hide()
+                        }
                     },
-                    modifier = Modifier.padding(start = 8.dp)
+                    modifier = Modifier.padding(start = 8.dp),
+                    enabled = searchQuery.isNotEmpty()
                 ) {
-                    Text("Cancel")
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Send",
+                        tint = if (searchQuery.isNotEmpty()) 
+                            MaterialTheme.colorScheme.primary 
+                        else 
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                    )
                 }
             }
         }
