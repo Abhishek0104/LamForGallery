@@ -58,7 +58,7 @@ class ViewModelFactory(
             modelClass.isAssignableFrom(AlbumsViewModel::class.java) -> AlbumsViewModel(galleryTools) as T
             modelClass.isAssignableFrom(AlbumDetailViewModel::class.java) -> AlbumDetailViewModel(galleryTools) as T
             modelClass.isAssignableFrom(EmbeddingViewModel::class.java) -> EmbeddingViewModel(application, imageEmbeddingDao, imageEncoder, galleryTools) as T
-            modelClass.isAssignableFrom(PhotoViewerViewModel::class.java) -> PhotoViewerViewModel() as T
+            modelClass.isAssignableFrom(PhotoViewerViewModel::class.java) -> PhotoViewerViewModel(imageEmbeddingDao) as T
             // --- NEW: People ViewModel ---
             modelClass.isAssignableFrom(PeopleViewModel::class.java) -> PeopleViewModel(personDao) as T
             modelClass.isAssignableFrom(PersonDetailViewModel::class.java) -> PersonDetailViewModel(personDao) as T

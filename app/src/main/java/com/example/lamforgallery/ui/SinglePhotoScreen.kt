@@ -28,6 +28,8 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 /**
@@ -69,52 +71,22 @@ fun SinglePhotoScreen(
             metadataText = "Loading details..."
 
             val info = withContext(Dispatchers.IO) {
-                try {
-                    val uri = Uri.parse(currentUriString)
-                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                        val exif = ExifInterface(inputStream)
-                        val date = exif.getAttribute(ExifInterface.TAG_DATETIME) ?: "Unknown Date"
-                        val make = exif.getAttribute(ExifInterface.TAG_MAKE) ?: ""
-                        val model = exif.getAttribute(ExifInterface.TAG_MODEL) ?: "Unknown Camera"
-                        val width = exif.getAttribute(ExifInterface.TAG_IMAGE_WIDTH) ?: "-"
-                        val height = exif.getAttribute(ExifInterface.TAG_IMAGE_LENGTH) ?: "-"
+                val embedding = viewModel.getMetadataForUri(currentUriString)
+                if (embedding != null) {
+                    val date = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date(embedding.dateTaken))
+                    val locationString = embedding.location ?: "No Location Data"
+                    val cameraModel = embedding.cameraModel ?: "Unknown Camera"
+                    val resolution = "${embedding.width}x${embedding.height}"
 
-                        var locationString = "No Location Data"
-                        val latLong = exif.latLong
-                        if (latLong != null) {
-                            val (lat, lon) = latLong
-                            locationString = try {
-                                val geocoder = Geocoder(context, Locale.getDefault())
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    @Suppress("DEPRECATION")
-                                    val addresses = geocoder.getFromLocation(lat, lon, 1)
-                                    val address = addresses?.firstOrNull()
-                                    if (address != null) {
-                                        val city = address.locality ?: address.subAdminArea
-                                        val country = address.countryName
-                                        "$city, $country"
-                                    } else "$lat, $lon"
-                                } else {
-                                    @Suppress("DEPRECATION")
-                                    val addresses = geocoder.getFromLocation(lat, lon, 1)
-                                    val address = addresses?.firstOrNull()
-                                    if (address != null) {
-                                        val city = address.locality ?: address.subAdminArea
-                                        val country = address.countryName
-                                        "$city, $country"
-                                    } else "$lat, $lon"
-                                }
-                            } catch (e: Exception) { "$lat, $lon" }
-                        }
-
-                        val sb = StringBuilder()
-                        sb.append("Date: $date\n")
-                        sb.append("Location: $locationString\n")
-                        sb.append("Device: $make $model\n")
-                        sb.append("Resolution: ${width}x${height}")
-                        sb.toString()
-                    } ?: "Could not access file."
-                } catch (e: Exception) { "Error: ${e.message}" }
+                    val sb = StringBuilder()
+                    sb.append("Date: $date\n")
+                    sb.append("Location: $locationString\n")
+                    sb.append("Device: $cameraModel\n")
+                    sb.append("Resolution: $resolution")
+                    sb.toString()
+                } else {
+                    "Could not find metadata in database."
+                }
             }
             metadataText = info
             isLoadingMetadata = false

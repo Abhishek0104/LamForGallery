@@ -8,28 +8,32 @@ import androidx.room.TypeConverters
 
 @Database(
     entities = [ImageEmbedding::class, Person::class, ImagePersonCrossRef::class],
-    version = 6, // --- BUMPED TO 5 ---
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
-    // ... rest is same ...
+
     abstract fun imageEmbeddingDao(): ImageEmbeddingDao
     abstract fun personDao(): PersonDao
 
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
+        private const val DATABASE_NAME = "picquery_database"
 
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "picquery_database"
+                    DATABASE_NAME
                 )
-                    .fallbackToDestructiveMigration() // Wipes DB to handle schema change
+                    // STEP 1: createFromAsset is temporarily removed to generate a clean DB.
+                    // .createFromAsset("database/$DATABASE_NAME.db") 
+                    .fallbackToDestructiveMigration() // Temporarily add this back to ensure it creates a new DB
                     .build()
+                
                 INSTANCE = instance
                 instance
             }
