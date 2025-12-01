@@ -54,4 +54,9 @@ interface PersonDao {
         removePhotoFromPerson(uri, oldPersonId)
         insertImagePersonLink(ImagePersonCrossRef(uri, newPersonId))
     }
+
+    @Transaction
+    suspend fun addPhotoToPerson(uri: String, newPersonId: String) {
+        insertImagePersonLink(ImagePersonCrossRef(uri, newPersonId))
+    }
 }

@@ -36,6 +36,7 @@ fun PersonDetailScreen(
     val uiState by viewModel.uiState.collectAsState()
     var showEditDialog by remember { mutableStateOf(false) }
     var showMoveDialog by remember { mutableStateOf(false) }
+    var showAddDialog by remember { mutableStateOf(false) }
     var selectedPhotoUri by remember { mutableStateOf<String?>(null) }
     var showPhotoMenu by remember { mutableStateOf(false) }
 
@@ -135,6 +136,10 @@ fun PersonDetailScreen(
                 onMove = {
                     showMoveDialog = true
                     showPhotoMenu = false
+                },
+                onAdd = {
+                    showAddDialog = true
+                    showPhotoMenu = false
                 }
             )
         }
@@ -149,6 +154,17 @@ fun PersonDetailScreen(
                 }
             )
         }
+
+        if (showAddDialog && selectedPhotoUri != null) {
+            AddPersonDialog(
+                allPeople = uiState.allPeople.filter { it.id != uiState.person?.id },
+                onDismiss = { showAddDialog = false },
+                onConfirm = { newPersonId ->
+                    viewModel.addPhotoToPerson(selectedPhotoUri!!, newPersonId)
+                    showAddDialog = false
+                }
+            )
+        }
     }
 }
 
@@ -156,7 +172,8 @@ fun PersonDetailScreen(
 fun PhotoActionMenu(
     onDismiss: () -> Unit,
     onRemove: () -> Unit,
-    onMove: () -> Unit
+    onMove: () -> Unit,
+    onAdd: () -> Unit
 ) {
     DropdownMenu(
         expanded = true,
@@ -170,6 +187,10 @@ fun PhotoActionMenu(
             text = { Text("Move to another person") },
             onClick = onMove
         )
+        DropdownMenuItem(
+            text = { Text("Add to another person") },
+            onClick = onAdd
+        )
     }
 }
 
@@ -182,6 +203,42 @@ fun MovePersonDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Move Photo To...") },
+        text = {
+            LazyColumn {
+                items(allPeople) { person ->
+                    ListItem(
+                        headlineContent = { Text(person.name) },
+                        modifier = Modifier.clickable { onConfirm(person.id) },
+                        leadingContent = {
+                            AsyncImage(
+                                model = person.coverUri,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(40.dp).clip(CircleShape)
+                            )
+                        }
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun AddPersonDialog(
+    allPeople: List<PersonUiModel>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Photo To...") },
         text = {
             LazyColumn {
                 items(allPeople) { person ->

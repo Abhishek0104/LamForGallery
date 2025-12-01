@@ -86,4 +86,13 @@ class PersonDetailViewModel(
             }
         }
     }
+
+    fun addPhotoToPerson(uri: String, newPersonId: String) {
+        val oldPersonId = _uiState.value.person?.id ?: return
+        if (oldPersonId == newPersonId) return // No change needed
+
+        viewModelScope.launch {
+            personDao.addPhotoToPerson(uri, newPersonId)
+        }
+    }
 }
