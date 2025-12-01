@@ -38,4 +38,10 @@ interface ImageEmbeddingDao {
      */
     @Query("SELECT * FROM image_embeddings WHERE uri = :uri LIMIT 1")
     suspend fun getEmbeddingByUri(uri: String): ImageEmbedding?
+
+    /**
+     * Retrieves all image embeddings within a given date range.
+     */
+    @Query("SELECT * FROM image_embeddings WHERE date_taken >= :startMillis AND date_taken <= :endMillis")
+    suspend fun getEmbeddingsInDateRange(startMillis: Long, endMillis: Long): List<ImageEmbedding>
 }

@@ -505,7 +505,7 @@ class GalleryTools(
                 try {
                     val startMillis = LocalDate.parse(params.startDate).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                     val endMillis = LocalDate.parse(params.endDate).atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                    dateFilterUris = getPhotosInDateRange(startMillis, endMillis).toSet()
+                    dateFilterUris = imageEmbeddingDao.getEmbeddingsInDateRange(startMillis, endMillis).map { it.uri }.toSet()
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to parse date range", e)
                 }
